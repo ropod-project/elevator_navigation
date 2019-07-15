@@ -11,6 +11,16 @@ A ROS component that manages action calls for elevator navigation. The component
 
 The actions are exposed through a single action server.
 
+## Dependencies
+
+The elevator navigation depends on the following other components:
+* [`ropod_rod_msgs`](https://git.ropod.org/ropod/communication/ropod_ros_msgs): Contains message and action definitions used within the component
+* [`maneuver_navigation`](https://github.com/ropod-project/ros-structured-nav): Handles navigation requests
+* [`world_model_mediator`](https://git.ropod.org/ropod/wm/ropod_wm_mediator): Handles world model queries
+* [`door_status_detection`](https://git.ropod.org/ropod/navigation/door_status_detection): Checks whether an elevator door is open or closed
+* [`floor_detection`](https://git.ropod.org/ropod/navigation/floor_detection): Tracks the current floor of the robot
+* [`map_switcher`](https://git.ropod.org/ropod/navigation/map_switcher): Handles requests for loading new navigation maps after floor changes
+
 ## Launch file parameters
 
 The component expects several parameters to be made available to the ROS parameter server:
