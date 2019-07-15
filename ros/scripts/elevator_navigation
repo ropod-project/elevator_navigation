@@ -228,7 +228,10 @@ class ElevatorNavigation(FTSMBase):
         feedback_msg = NavElevatorFeedback()
 
         # we get two elevator waypoints - one outside the elevator and one inside
-        self.get_elevator_waypoints(self.elevator_nav_data.current_action.elevator)
+        waiting_pose, inside_pose, door_position = self.get_elevator_waypoints(self.elevator_nav_data.current_action.elevator)
+        self.elevator_nav_data.waiting_pose = waiting_pose
+        self.elevator_nav_data.inside_elevator_pose = inside_pose
+        self.elevator_nav_data.elevator_door_position = door_position
 
         # we send a navigation goal to the waypoint outside the elevator and wait
         # for the navigation to complete or time out
@@ -349,17 +352,33 @@ class ElevatorNavigation(FTSMBase):
         return NavElevatorResult(success=True)
 
     def get_elevator_waypoints(self, elevator_params):
+        '''Returns a tuple of three elements:
+        * waiting_pose: geometry_msgs.msg.Pose -- a pose where a robot should wait for an elevator
+        * inside_elevator_pose: geometry_msgs.msg.Pose -- a pose inside an elevator
+        * elevator_door_position: geometry_msgs.msg.Pose -- position of an elevator door
+
+        The first two of these are obtained by sending a query to self.elevator_waypoints_client;
+        the elevator door position is obtained by querying self.topology_node_client.
+
+        Raises a generic exception if either of the queries fails.
+
+        '''
+        waiting_pose = None
+        inside_elevator_pose = None
+        elevator_door_position = None
+
         elevator_waypoints_goal = GetElevatorWaypointsGoal()
         elevator_waypoints_goal.elevator_id = elevator_params.elevator_id
         elevator_waypoints_goal.door_id = elevator_params.door_id
 
+        rospy.loginfo('[elevator_nav] Querying for elevator waypoints')
         self.elevator_waypoints_client.send_goal(elevator_waypoints_goal)
         if self.elevator_waypoints_client.wait_for_result(rospy.Duration.from_sec(10)):
             elevator_waypoint_result = self.elevator_waypoints_client.get_result()
-            self.elevator_nav_data.waiting_pose = elevator_waypoint_result.wp_outside
-            self.elevator_nav_data.inside_elevator_pose = elevator_waypoint_result.wp_inside
-            rospy.loginfo('Waypoints for elevator {0} and door {1} assigned'.format(elevator_params.elevator_id,
-                                                                                    elevator_params.door_id))
+            waiting_pose = elevator_waypoint_result.wp_outside
+            inside_elevator_pose = elevator_waypoint_result.wp_inside
+            rospy.loginfo('Waypoints for elevator {0} and door {1} retrieved'.format(elevator_params.elevator_id,
+                                                                                     elevator_params.door_id))
         else:
             rospy.logerr('Waypoints for elevator {0} and door {1} could not be retrieved'.format(elevator_params.elevator_id,
                                                                                                  elevator_params.door_id))
@@ -369,13 +388,16 @@ class ElevatorNavigation(FTSMBase):
         topology_node_goal.id = elevator_params.door_id
         topology_node_goal.type = 'door'
 
+        rospy.loginfo('[elevator_nav] Querying for elevator door position')
         self.topology_node_client.send_goal(topology_node_goal)
         if self.topology_node_client.wait_for_result(rospy.Duration.from_sec(10.)):
             topology_client_result = self.topology_node_client.get_result()
-            self.elevator_nav_data.elevator_door_position = topology_client_result.position
+            elevator_door_position = topology_client_result.position
         else:
             rospy.logerr('Topology information for door {0} could not be retrieved'.format(elevator_params.door_id))
             raise Exception('Door topology information could not be retrieved')
+
+        return (waiting_pose, inside_elevator_pose, elevator_door_position)
 
     def get_outside_area_pose(self, outside_area_id):
         '''Calls self.topology_node_client to obtain the position of the given area
