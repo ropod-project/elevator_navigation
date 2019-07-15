@@ -1,0 +1,31 @@
+<package>
+  <name>elevator_navigation</name>
+  <version>1.0.0</version>
+  <description>
+    Component managing the workflow of changing a floor using an elevator
+  </description>
+  <license>GPLv3</license>
+
+  <author email="aleksandar.mitrevski@h-brs.de">Alex Mitrevski</author>
+  <author email="dharmingeo@gmail.com">Dharmin Bakaraniya</author>
+
+  <maintainer email="aleksandar.mitrevski@h-brs.de">Alex Mitrevski</maintainer>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>rospy</build_depend>
+  <build_depend>ropod_ros_msgs</build_depend>
+  <build_depend>maneuver_navigation</build_depend>
+  <build_depend>door_status_detection</build_depend>
+  <build_depend>floor_detection</build_depend>
+  <build_depend>map_switcher</build_depend>
+
+  <run_depend>rospy</run_depend>
+  <run_depend>ropod_ros_msgs</run_depend>
+  <run_depend>maneuver_navigation</run_depend>
+  <run_depend>door_status_detection</run_depend>
+  <run_depend>floor_detection</run_depend>
+  <run_depend>map_switcher</run_depend>
+
+  <test_depend>roslaunch</test_depend>
+</package>

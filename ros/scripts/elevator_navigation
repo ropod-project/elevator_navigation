@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+import rospy
+import actionlib
+
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+
+from ropod_ros_msgs.srv import GetDoorStatus
+from ropod_ros_msgs.msg import GetElevatorWaypointsAction, GetElevatorWaypointsGoal
+from ropod_ros_msgs.msg import GetTopologyNodeAction, GetTopologyNodeGoal
+from ropod_ros_msgs.msg import NavElevatorAction, NavElevatorFeedback, NavElevatorResult
+from floor_detection.srv import DetectFloor
+from map_switcher.srv import SwitchMap
+from maneuver_navigation.msg import Goal as ManeuverNavigationGoal
+
+from pyftsm.ftsm import FTSMStates, FTSMTransitions
+from ropod.ftsm.ftsm_base import FTSMBase, DependMonitorTypes
+
+class ElevatorNavigationNode(FTSMBase):
+    '''
+
+    @author Alex Mitrevski
+    @contact aleksandar.mitrevski@h-brs.de
+
+    '''
+    def __init__(self):
+        component_name = 'elevator_navigation'
+        dependencies = ['roscore', 'world_model_mediator', 'door_status_detector',
+                        'floor_detector', 'map_switcher']
+        dependency_monitors = {'functional': {'roscore': 'ros/ros_master_monitor',
+                                              'world_model_mediator': 'ros/ros_node_monitor',
+                                              'door_status_detector': 'ros/ros_node_monitor',
+                                              'floor_detector': 'ros/ros_node_monitor',
+                                              'map_switcher': 'ros/ros_node_monitor'}}
+        super(ElevatorNavigationNode, self).__init__(component_name,
+                                                     dependencies,
+                                                     dependency_monitors)
+
+        self.elevator_nav_server_name = rospy.get_param('~elevator_nav_server_name',
+                                                        '/ropod/take_elevator')
+        self.mn_nav_topic = rospy.get_param('~mn_nav_topic', '/route_navigation/goal')
+        self.elevator_waypoints_server = rospy.get_param('~elevator_waypoints_server',
+                                                         '/get_elevator_waypoints')
+        self.topology_node_server = rospy.get_param('~topology_node_server',
+                                                    '/get_topology_node')
+        self.door_status_detection_server = rospy.get_param('~door_status_detection_server',
+                                                            '/get_door_status')
+        self.floor_detection_server = rospy.get_param('~floor_detection_server',
+                                                      '/floor_detection_server')
+        self.map_switcher_server = rospy.get_param('~map_switcher_server',
+                                                   '/map_switcher/change_map')
+        self.init_pose_topic = rospy.get_param('~init_pose_topic', '/initialpose')
+
+        self.active_action = False
+        self.elevator_id = -1
+        self.destination_floor = -1
+        self.inside_elevator = False
+        self.goal_sent = False
+        self.base_position = PoseStamped()
+
+    def init(self):
+        try:
+            rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.mn_nav_topic))
+            self.mn_nav_pub = rospy.Publisher(self.mn_nav_topic, ManeuverNavigationGoal, queue_size=1)
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.init_pose_topic))
+            self.init_pose_pub = rospy.Publisher(self.init_pose_topic,
+                                                 PoseWithCovarianceStamped,
+                                                 queue_size=1)
+
+
+            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.door_status_detection_server))
+            rospy.wait_for_service(self.door_status_detection_server, timeout=120)
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.door_status_detection_server))
+            self.get_door_status_client = rospy.ServiceProxy(self.door_status_detection_server,
+                                                             GetDoorStatus)
+
+
+            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.floor_detection_server))
+            rospy.wait_for_service(self.floor_detection_server, timeout=120)
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.floor_detection_server))
+            self.floor_detection_client = rospy.ServiceProxy(self.floor_detection_server, DetectFloor)
+
+
+            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.map_switcher_server))
+            rospy.wait_for_service(self.map_switcher_server, timeout=120)
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.map_switcher_server))
+            self.map_switcher_client = rospy.ServiceProxy(self.map_switcher_server, SwitchMap)
+
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.elevator_waypoints_server))
+            self.elevator_waypoints_client = actionlib.SimpleActionClient(self.elevator_waypoints_server,
+                                                                          GetElevatorWaypointsAction)
+
+            rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.elevator_waypoints_server))
+            self.elevator_waypoints_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
+
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.topology_node_server))
+            self.topology_node_client = actionlib.SimpleActionClient(self.topology_node_server,
+                                                                     GetTopologyNodeAction)
+
+            rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.topology_node_server))
+            self.topology_node_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
+
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" action server'.format(self.elevator_nav_server_name))
+            self.elevator_nav_server = actionlib.SimpleActionServer(self.elevator_nav_server_name,
+                                                                    NavElevatorAction,
+                                                                    self.get_action, False)
+            self.elevator_nav_server.start()
+        except rospy.ServiceException as exc:
+            rospy.logerr('[elevator_nav] Initialisation error: {0}'.format(str(err)))
+            return FTSMTransitions.INIT_FAILED
+
+        return FTSMTransitions.INITIALISED
+
+    def ready(self):
+        if not self.active_action:
+            return FTSMTransitions.WAIT
+        return FTSMTransitions.RUN
+
+    def running(self):
+        if not self.active_action:
+            return FTSMTransitions.DONE
+        return FTSMTransitions.CONTINUE
+
+    def recovering(self):
+        return FTSMTransitions.DONE_RECOVERING
+
+    def get_action(self, request):
+        rospy.loginfo('[elevator_nav] Action request received: {0}'.format(request.action.type))
+        self.active_action = True
+
+        # TODO: actually process the action
+        rospy.sleep(5.)
+        self.elevator_nav_server.set_succeeded(NavElevatorResult(success=True))
+
+    def send_waiting_pose(self):
+        nav_goal = ManeuverNavigationGoal()
+        nav_goal.start.header.frame_id = 'map'
+        nav_goal.start.header.stamp = rospy.Time.now()
+        nav_goal.start.pose = self.base_position.pose
+
+        nav_goal.goal.header.frame_id = 'map'
+        nav_goal.goal.header.stamp = rospy.Time.now()
+        nav_goal.goal.pose.position = self.waiting_pose.position
+        nav_goal.goal.pose.orientation.w = self.waiting_pose.orientation.w
+        nav_goal.goal.pose.orientation.x = self.waiting_pose.orientation.x
+        nav_goal.goal.pose.orientation.y = self.waiting_pose.orientation.y
+        nav_goal.goal.pose.orientation.z = self.waiting_pose.orientation.z
+
+        self.mn_nav_pub.publish(nav_goal)
+
+    def send_inside_elevator_pose(self):
+        nav_goal = ManeuverNavigationGoal()
+        nav_goal.start.header.frame_id = 'map'
+        nav_goal.start.header.stamp = rospy.Time.now()
+        nav_goal.start.pose = self.base_position.pose
+
+        nav_goal.goal.header.frame_id = 'map'
+        nav_goal.goal.header.stamp = rospy.Time.now()
+        nav_goal.goal.pose.position = self.inside_elevator_pose.position
+        nav_goal.goal.pose.orientation.w = self.inside_elevator_pose.orientation.w
+        nav_goal.goal.pose.orientation.x = self.inside_elevator_pose.orientation.x
+        nav_goal.goal.pose.orientation.y = self.inside_elevator_pose.orientation.y
+        nav_goal.goal.pose.orientation.z = self.inside_elevator_pose.orientation.z
+
+        self.mn_nav_pub.publish(nav_goal)
+
+    def send_outside_elevator_pose(self, outside_area_id):
+        nav_goal = ManeuverNavigationGoal()
+
+        topology_node_goal = GetTopologyNodeGoal()
+        topology_node_goal.id = int(outside_area_id)
+        topology_node_goal.type = 'local_area'
+
+        self.topology_node_client.send_goal(topology_node_goal)
+        topology_client_completed = self.topology_node_client.wait_for_result(rospy.Duration.from_sec(10.))
+        if topology_client_completed:
+            topology_client_result = self.topology_node_client.get_result()
+            outside_position = topology_client_result.position
+
+            nav_goal.goal.pose.position.x = outside_position.x
+            nav_goal.goal.pose.position.y = outside_position.y
+            nav_goal.goal.pose.position.z = 0.
+
+            # TODO: handle the orientation better (e.g. what if we have a cart and we cannot easily get out)
+            nav_goal.goal.pose.orientation.x = 0.
+            nav_goal.goal.pose.orientation.y = 0.
+            nav_goal.goal.pose.orientation.z = 0.
+            nav_goal.goal.pose.orientation.w = 1.
+        else:
+            rospy.logerr("Topology information for area {0} could not be retrieved".format(outside_area_id))
+            raise Exception("Area topology information could not be retrieved")
+
+        nav_goal.start.header.frame_id = 'map'
+        nav_goal.start.header.stamp = rospy.Time.now()
+        nav_goal.start.pose = self.base_position.pose
+
+        nav_goal.goal.header.frame_id = 'map'
+        nav_goal.goal.header.stamp = rospy.Time.now()
+
+        self.mn_nav_pub.publish(nav_goal)
+
+if __name__ == '__main__':
+    rospy.init_node('elevator_navigation')
+    elevator_navigation_node = ElevatorNavigationNode()
+    try:
+        elevator_navigation_node.run()
+        while elevator_navigation_node.is_running and not rospy.is_shutdown():
+            rospy.sleep(0.1)
+    except (KeyboardInterrupt, SystemExit):
+        rospy.loginfo('{0} interrupted exiting...'.format(elevator_navigation_node.name))
+        elevator_navigation_node.stop()
