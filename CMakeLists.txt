@@ -10,6 +10,8 @@ find_package(catkin REQUIRED COMPONENTS
     map_switcher
 )
 
+catkin_python_setup()
+
 catkin_package(
   CATKIN_DEPENDS
     rospy
