@@ -1,12 +1,20 @@
 <launch>
     <node name="elevator_navigation" pkg="elevator_navigation" type="elevator_navigation" output="screen">
-        <param name="elevator_nav_server_name" value="/ropod/take_elevator" />
-        <param name="mn_nav_topic" value="/route_navigation/goal" />
-        <param name="elevator_waypoints_server" value="/get_elevator_waypoints" />
-        <param name="topology_node_server" value="/get_topology_node" />
-        <param name="door_status_detection_server" value="/get_door_status" />
-        <param name="floor_detection_server" value="/floor_detection_server" />
-        <param name="map_switcher_server" value="/map_switcher/change_map" />
-        <param name="init_pose_topic" value="/initialpose" />
+        <param name="mn_nav_topic" type="str" value="/route_navigation/goal" />
+        <param name="init_pose_topic" type="str" value="/initialpose" />
+        <param name="localisation_topic" type="str" value="/amcl_pose" />
+
+        <param name="elevator_nav_server_name" type="str" value="/ropod/take_elevator" />
+        <param name="elevator_waypoints_server" type="str" value="/get_elevator_waypoints" />
+        <param name="topology_node_server" type="str" value="/get_topology_node" />
+        <param name="door_status_detection_server" type="str" value="/get_door_status" />
+        <param name="floor_detection_server" type="str" value="/floor_detection_server" />
+        <param name="map_switcher_server" type="str" value="/map_switcher/change_map" />
+
+        <param name="go_to_elevator_timeout" type="double" value="120" />
+        <param name="wait_for_elevator_timeout" type="double" value="120" />
+        <param name="enter_elevator_timeout" type="double" value="120" />
+        <param name="ride_elevator_timeout" type="double" value="600" />
+        <param name="exit_elevator_timeout" type="double" value="120" />
     </node>
 </launch>
