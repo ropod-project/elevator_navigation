@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 import rospy
 import actionlib
+from tf import transformations as tf
 
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
 
 from ropod_ros_msgs.srv import GetDoorStatus, GetDoorStatusRequest
 from ropod_ros_msgs.msg import GetElevatorWaypointsAction, GetElevatorWaypointsGoal
@@ -16,7 +17,60 @@ from pyftsm.ftsm import FTSMStates, FTSMTransitions
 from ropod.ftsm.ftsm_base import FTSMBase, DependMonitorTypes
 
 def has_timed_out(start_time, timeout):
+    '''Returns True if the difference between the current time and the given
+    start time is greater than or equal to the given timeout; returns False otherwise.
+
+    Keyword arguments:
+    start_time: float -- start time of an operation
+    timeout: float -- operation timeout
+
+    '''
     return (rospy.get_time() - start_time) < timeout
+
+def is_waypoint_achieved(pose1, pose2, pos_tolerance_m, orientation_tolerance_rad):
+    '''Returns True if the position distance between the poses is less than
+    pos_tolerance_m and the orientation distance is less than orientation_tolerance_rad.
+
+    Keyword arguments:
+    pose1: geometry_msgs.msg.PoseStamped
+    pose2: geometry_msgs.msg.PoseStamped
+    pos_tolerance_m: float -- position tolerance in meters
+    orientation_tolerance_rad: float -- orientation tolerance in radians
+
+    '''
+    pos_distance = ((pose1.position.x - pose2.position.x)**2 \
+                  + (pose1.position.y - pose2.position.y)**2)
+
+    pose1_euler_orientation = tf.euler_from_quaternion([pose1.orientation.w, pose1.orientation.x,
+                                                        pose1.orientation.y, pose1.orientation.z])
+
+    pose2_euler_orientation = tf.euler_from_quaternion([pose2.orientation.w, pose2.orientation.x,
+                                                        pose2.orientation.y, pose2.orientation.z])
+
+    angular_distance = abs(pose1_euler_orientation[2] - pose2_euler_orientation[2])
+    return pos_distance < pos_tolerance_m and angular_distance < orientation_tolerance_rad
+
+def send_maneuver_nav_goal(goal_pub, frame_id, start_pose, goal_pose):
+    '''Sends a maneuver navigation goal from "start_pose" to "goal_pose"
+    in the given frame using the given goal publisher.
+
+    Keyword arguments:
+    goal_pub: rospy.Publisher -- maneuver navigation goal publisher
+    frame_id: str -- frame ID of the start and goal poses
+    start_pose: geometry_msgs.msg.Pose -- start pose for the navigation
+    goal_pose: geometry_msgs.msg.Pose -- goal pose for the navigation
+
+    '''
+    nav_goal = ManeuverNavigationGoal()
+    nav_goal.start.header.frame_id = frame_id
+    nav_goal.start.header.stamp = rospy.Time.now()
+    nav_goal.start.pose = start_pose
+
+    nav_goal.goal.header.frame_id = frame_id
+    nav_goal.goal.header.stamp = rospy.Time.now()
+    nav_goal.goal.pose = goal_pose
+
+    goal_pub.publish(nav_goal)
 
 
 class ElevatorNavData(object):
@@ -30,7 +84,50 @@ class ElevatorNavData(object):
 
 
 class ElevatorNavigation(FTSMBase):
-    '''
+    '''Manages action calls for elevator navigation. The component subscribes to
+    four different action types:
+    * WAIT_FOR_ELEVATOR
+    * ENTER_ELEVATOR
+    * RIDE_ELEVATOR
+    * EXIT_ELEVATOR
+
+    The actions are exposes through a single action server.
+
+    The node expects several parameters to be made available to the ROS parameter server:
+    mn_nav_topic: str -- name of a topic for sending maneuver
+                         navigation goals (default /route_navigation/goal)
+    init_pose_topic: str -- name of a topic for initialising the pose
+                            of a robot (default /initialpose)
+    localisation_topic: str -- name of a topic on which localisation
+                               pose estimates are published (default /amcl_pose)
+    elevator_nav_server_name: str -- name of the action server exposed by
+                                     the component (default /ropod/take_elevator)
+    elevator_waypoints_server: str -- name of an action server that responds to
+                                      elevator waypoint queries (default /get_elevator_waypoints)
+    topology_node_server: str -- name of a server that responds to queries regarding
+                                 area topologies (default /get_topology_node)
+    door_status_detection_server: str -- name of a service for checking whether a door
+                                         is open or closed (default /get_door_status)
+    floor_detection_server: str -- name of a service that returns the currrent floor
+                                   of a robot (default /floor_detection_server)
+    map_switcher_server: str -- name of a server for loading new environment maps
+                                (default /map_switcher/change_map)
+
+    go_to_elevator_timeout: float -- timeout (in seconds) for the action of going to a waypoint
+                                     where a robot can wait for an elevator (default 120)
+    wait_for_elevator_timeout: float -- timeout (in seconds) for the action of waiting
+                                        for an elevator (default 120)
+    enter_elevator_timeout: float -- timeout (in seconds) for the action of entering
+                                     an elevator (default 120)
+    ride_elevator_timeout: float -- timeout (in seconds) for the action of riding
+                                    an elevator (default 120)
+    exit_elevator_timeout: float -- timeout (in seconds) for the action of exiting
+                                    an elevator (default 120)
+
+    pos_tolerance_m: float -- distance tolerance (in meters) for navigation
+                              waypoints (default 0.3)
+    orientation_tolerance_deg: float -- orientation tolerance (in degrees) for
+                                        navigation waypoints (default 20)
 
     @author Alex Mitrevski, Dharmin Bakaraniya
     @contact aleksandar.mitrevski@h-brs.de
@@ -81,6 +178,10 @@ class ElevatorNavigation(FTSMBase):
         self.enter_elevator_timeout = float(rospy.get_param('~enter_elevator_timeout', 120.))
         self.ride_elevator_timeout = float(rospy.get_param('~ride_elevator_timeout', 600.))
         self.exit_elevator_timeout = float(rospy.get_param('~exit_elevator_timeout', 120.))
+
+        self.pos_tolerance_m = float(rospy.get_param('~pos_tolerance_m', 0.3))
+        orientation_tolerance_deg = float(rospy.get_param('~orientation_tolerance_deg', 20.))
+        self.orientation_tolerance_rad = (orientation_tolerance_deg * 3.141592) / 180.
 
         self.elevator_nav_data = ElevatorNavData()
 
@@ -190,24 +291,41 @@ class ElevatorNavigation(FTSMBase):
 
     def handle_wait_for_elevator(self):
         feedback_msg = NavElevatorFeedback()
+
+        # we get two elevator waypoints - one outside the elevator and one inside
         self.get_elevator_waypoints(self.elevator_nav_data.current_action.elevator)
-        self.send_waiting_pose()
+
+        # we send a navigation goal to the waypoint outside the elevator and wait
+        # for the navigation to complete or time out
+        send_maneuver_nav_goal(self.mn_nav_pub, self.elevator_nav_data.base_pose.header.frame_id,
+                               self.elevator_nav_data.base_pose.pose.pose,
+                               self.elevator_nav_data.waiting_pose)
+
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Going to elevator waiting point')
-        while not self.is_waypoint_achieved() and has_timed_out(start_time, self.go_to_elevator_timeout):
+        while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+                                       self.elevator_nav_data.waiting_pose,
+                                       self.pos_tolerance_m,
+                                       self.orientation_tolerance_rad) and has_timed_out(start_time, self.go_to_elevator_timeout):
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
-        if not self.is_waypoint_achieved():
+        # if the elevator waypoint could not be achieved, we give up and return a failure
+        if not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+                                    self.elevator_nav_data.waiting_pose,
+                                    self.pos_tolerance_m,
+                                    self.orientation_tolerance_rad):
             rospy.logerr('[elevator_nav] Elevator waypoint not achieved within the allotted time; giving up')
             return NavElevatorResult(success=False)
 
+        # we wait for the elevator door to open
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Waiting for elevator door to open')
         while not self.is_door_open() and has_timed_out(start_time, self.wait_for_elevator_timeout):
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
+        # if the door waiting has timed out, we give up and return a failure
         if not self.is_door_open():
             rospy.logerr('[elevator_nav] Elevator door did not open within the allotted time; giving up')
             return NavElevatorResult(success=False)
@@ -216,20 +334,35 @@ class ElevatorNavigation(FTSMBase):
 
     def handle_enter_elevator(self):
         feedback_msg = NavElevatorFeedback()
-        self.send_inside_elevator_pose()
+
+        # we send a navigation goal to the waypoint inside the elevator and wait
+        # for the navigation to complete or time out
+        send_maneuver_nav_goal(self.mn_nav_pub, self.elevator_nav_data.base_pose.header.frame_id,
+                               self.elevator_nav_data.base_pose.pose.pose,
+                               self.elevator_nav_data.inside_elevator_pose)
+
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Entering elevator')
-        while not self.is_waypoint_achieved() and has_timed_out(start_time, self.enter_elevator_timeout):
+        while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+                                       self.elevator_nav_data.inside_elevator_pose,
+                                       self.pos_tolerance_m,
+                                       self.orientation_tolerance_rad) and has_timed_out(start_time, self.enter_elevator_timeout):
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
-        if not self.is_waypoint_achieved():
+        # if the elevator waypoint could not be achieved, we give up and return a failure
+        if not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+                                    self.elevator_nav_data.inside_elevator_pose,
+                                    self.pos_tolerance_m,
+                                    self.orientation_tolerance_rad):
             rospy.logerr('[elevator_nav] Elevator could not be entered within the allotted time; giving up')
             return NavElevatorResult(success=False)
         return NavElevatorResult(success=True)
 
     def handle_ride_elevator(self):
         feedback_msg = NavElevatorFeedback()
+
+        # we wait for the destination floor to be reached or for the wait to time out
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Riding elevator')
         while not self.is_destination_floor_reached(self.elevator_nav_data.current_action.goal_floor) and \
@@ -237,20 +370,45 @@ class ElevatorNavigation(FTSMBase):
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
+        # if the wait has timed out, we give up and return a failure
         if not self.is_destination_floor_reached(self.elevator_nav_data.current_action.goal_floor):
             rospy.logerr('[elevator_nav] Elevator ride has not completed within the allotted time; giving up')
+            return NavElevatorResult(success=False)
+
+        # if the destination floor has been reached, we change the map to that of the new floor;
+        # we return a failure if the map cannot be switched
+        new_map_loaded = self.load_new_map(self.elevator_nav_data.current_action.goal_floor)
+        if not new_map_loaded:
+            # TODO: retrying to load the map might be a more reasonable option here
+            rospy.logerr('[elevator_nav] Could not switch map for new floor; giving up')
             return NavElevatorResult(success=False)
         return NavElevatorResult(success=True)
 
     def handle_exit_elevator(self):
         feedback_msg = NavElevatorFeedback()
-        self.send_outside_elevator_pose(self.elevator_nav_data.current_action.areas[0].id)
+
+        # we query for a pose of the outside area given in the action message
+        outside_area_pose = self.get_outside_area_pose(self.elevator_nav_data.current_action.areas[0].id)
+
+        # we send a navigation goal to the waypoint outside the elevator and wait
+        # for the navigation to complete or time out
+        send_maneuver_nav_goal(self.mn_nav_pub, self.elevator_nav_data.base_pose.header.frame_id,
+                               self.elevator_nav_data.base_pose.pose.pose,
+                               outside_area_pose)
+
         rospy.loginfo('[elevator_nav] Exiting elevator')
-        while not self.is_waypoint_achieved() and has_timed_out(start_time, self.exit_elevator_timeout):
+        while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+                                       outside_area_pose,
+                                       self.pos_tolerance_m,
+                                       self.orientation_tolerance_rad) and has_timed_out(start_time, self.exit_elevator_timeout):
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
-        if not self.is_waypoint_achieved():
+        # if the outside waypoint could not be achieved, we give up and return a failure
+        if not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+                                    outside_area_pose,
+                                    self.pos_tolerance_m,
+                                    self.orientation_tolerance_rad):
             rospy.logerr('[elevator_nav] Elevator could not be exited within the allotted time; giving up')
             return NavElevatorResult(success=False)
         return NavElevatorResult(success=True)
@@ -284,33 +442,16 @@ class ElevatorNavigation(FTSMBase):
             rospy.logerr('Topology information for door {0} could not be retrieved'.format(elevator_params.door_id))
             raise Exception('Door topology information could not be retrieved')
 
-    def send_waiting_pose(self):
-        nav_goal = ManeuverNavigationGoal()
-        nav_goal.start.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
-        nav_goal.start.header.stamp = rospy.Time.now()
-        nav_goal.start.pose = self.elevator_nav_data.base_pose.pose.pose
+    def get_outside_area_pose(self, outside_area_id):
+        '''Calls self.topology_node_client to obtain the position of the given area
+        and returns a geometry_msgs.msg.Pose object representing the area pose
+        (with the obtained position and orientation = (0, 0, 0)).
+        Raises a generic exception if the call to self.topology_node_client is not successful.
 
-        nav_goal.goal.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
-        nav_goal.goal.header.stamp = rospy.Time.now()
-        nav_goal.goal.pose = self.elevator_nav_data.waiting_pose
+        Keyword argument:
+        outside_area_id: str -- ID of an area outside the elevator
 
-        self.mn_nav_pub.publish(nav_goal)
-
-    def send_inside_elevator_pose(self):
-        nav_goal = ManeuverNavigationGoal()
-        nav_goal.start.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
-        nav_goal.start.header.stamp = rospy.Time.now()
-        nav_goal.start.pose = self.elevator_nav_data.base_pose.pose.pose
-
-        nav_goal.goal.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
-        nav_goal.goal.header.stamp = rospy.Time.now()
-        nav_goal.goal.pose = self.elevator_nav_data.inside_elevator_pose
-
-        self.mn_nav_pub.publish(nav_goal)
-
-    def send_outside_elevator_pose(self, outside_area_id):
-        nav_goal = ManeuverNavigationGoal()
-
+        '''
         topology_node_goal = GetTopologyNodeGoal()
         topology_node_goal.id = int(outside_area_id)
         topology_node_goal.type = 'local_area'
@@ -319,35 +460,27 @@ class ElevatorNavigation(FTSMBase):
         topology_client_completed = self.topology_node_client.wait_for_result(rospy.Duration.from_sec(10.))
         if topology_client_completed:
             topology_client_result = self.topology_node_client.get_result()
+
+            outside_area_pose = Pose()
             outside_position = topology_client_result.position
 
-            nav_goal.goal.pose.position.x = outside_position.x
-            nav_goal.goal.pose.position.y = outside_position.y
-            nav_goal.goal.pose.position.z = 0.
+            outside_area_pose.position.x = outside_position.x
+            outside_area_pose.position.y = outside_position.y
+            outside_area_pose.position.z = 0.
 
             # TODO: handle the orientation better (e.g. what if we have a cart and we cannot easily get out)
-            nav_goal.goal.pose.orientation.x = 0.
-            nav_goal.goal.pose.orientation.y = 0.
-            nav_goal.goal.pose.orientation.z = 0.
-            nav_goal.goal.pose.orientation.w = 1.
+            outside_area_pose.orientation.x = 0.
+            outside_area_pose.orientation.y = 0.
+            outside_area_pose.orientation.z = 0.
+            outside_area_pose.orientation.w = 1.
         else:
             rospy.logerr('Topology information for area "{0}" could not be retrieved'.format(outside_area_id))
             raise Exception('Area topology information could not be retrieved')
 
-        nav_goal.start.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
-        nav_goal.start.header.stamp = rospy.Time.now()
-        nav_goal.start.pose = self.elevator_nav_data.base_pose.pose.pose
-
-        nav_goal.goal.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
-        nav_goal.goal.header.stamp = rospy.Time.now()
-
-        self.mn_nav_pub.publish(nav_goal)
-
-    def is_waypoint_achieved(self):
-        # TODO: implement the function
-        return True
-
     def is_door_open(self):
+        '''Calls self.get_door_status and returns the current door status.
+        Raises a rospy.ServiceException exception if there is a service call error.
+        '''
         door_status_request = GetDoorStatusRequest()
         door_status_request.robot_pose = self.elevator_nav_data.base_pose.pose.pose
         door_status_request.door_position = self.elevator_nav_data.elevator_door_position
@@ -363,6 +496,14 @@ class ElevatorNavigation(FTSMBase):
             raise
 
     def is_destination_floor_reached(self, destination_floor):
+        '''Calls self.get_floor and returns True if the current floor as obtained
+        from the service call equals the destination floor; returns False otherwise.
+        Raises a rospy.ServiceException exception if there is a service call error.
+
+        Keyword arguments:
+        destination_floor: int -- destination floor for the elevator ride
+
+        '''
         try:
             get_floor_request = DetectFloorRequest()
             get_floor_response = self.get_floor(get_floor_request)
@@ -374,7 +515,19 @@ class ElevatorNavigation(FTSMBase):
             rospy.logerr('[elevator_nav] Could not get the current floor: {0}'.format(str(exc)))
             raise
 
-    def load_new_map(self):
+    def load_new_map(self, destination_floor):
+        '''Calls self.switch_map to load a map of the current floor and relocalises
+        the robot in the new map.
+
+        Note: Map names are assumed to follow the naming convention "map_floor<x>",
+        where <x> is the floor number. In the call to self.switch_map, wormholes
+        are assumed to follow the naming convention "elevator_<y>", where <y>
+        is an elevator ID.
+
+        Keyword arguments:
+        destination_floor: int -- destination floor for the elevator ride
+
+        '''
         rospy.loginfo('[elevator_nav] Switching map to {1}'.format(switch_map_request.new_map))
         try:
             switch_map_request = SwitchMapRequest()
@@ -397,9 +550,17 @@ class ElevatorNavigation(FTSMBase):
             raise
 
     def __set_base_pose(self, pose_msg):
+        '''Sets self.elevator_nav_data.base_pose to the given argument.
+
+        Keyword arguments:
+        pose_msg: geometry_msgs.msg.PoseWithCovarianceStamped
+
+        '''
         self.elevator_nav_data.base_pose = pose_msg
 
     def __reset_elevator_nav(self):
+        '''Resets self.elevator_nav_data.
+        '''
         self.elevator_nav_data = ElevatorNavData()
 
 if __name__ == '__main__':
@@ -410,5 +571,5 @@ if __name__ == '__main__':
         while elevator_navigation_node.is_running and not rospy.is_shutdown():
             rospy.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
-        rospy.loginfo('0 interrupted exiting...'.format(elevator_navigation_node.name))
+        rospy.loginfo('{0} interrupted exiting...'.format(elevator_navigation_node.name))
         elevator_navigation_node.stop()
