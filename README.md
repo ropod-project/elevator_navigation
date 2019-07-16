@@ -9,6 +9,8 @@ A ROS component that manages action calls for elevator navigation. The component
 3. `RIDE_ELEVATOR`
 4. `EXIT_ELEVATOR`
 
+These actions are defined in [this PDDL domain](https://github.com/ropod-project/task-planner/blob/master/config/task_domains/agaplesion/hospital_transportation.pddl).
+
 The actions are exposed through a single action server, such that action calls are assumed to be made in the above order. The split into four actions is made for the purposes of simplified fault tolerance, as each individual step of the sequence can be triggered and then monitored independently of the others.
 
 The component is embedded into a [fault-tolerant state machine](https://github.com/ropod-project/ftsm) and has [this specification](https://github.com/ropod-project/component-monitoring/blob/master/component_monitoring/component_config/robot/software/elevator_navigation.yaml).
