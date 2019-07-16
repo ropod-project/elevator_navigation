@@ -2,6 +2,7 @@
 <launch>
     <node name="elevator_navigation" pkg="elevator_navigation" type="elevator_navigation" output="screen">
         <param name="mn_nav_topic" type="str" value="/route_navigation/goal" />
+        <param name="mn_nav_cancel_topic" type="str" value="/route_navigation/cancel" />
         <param name="init_pose_topic" type="str" value="/initialpose" />
         <param name="localisation_topic" type="str" value="/amcl_pose" />
 

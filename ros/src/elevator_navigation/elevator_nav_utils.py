@@ -24,7 +24,7 @@ def has_timed_out(start_time, timeout):
     timeout: float -- operation timeout
 
     '''
-    return (rospy.get_time() - start_time) < timeout
+    return (rospy.get_time() - start_time) >= timeout
 
 def is_waypoint_achieved(pose1, pose2, pos_tolerance_m, orientation_tolerance_rad):
     '''Returns True if the position distance between the poses is less than

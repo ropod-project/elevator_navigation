@@ -2,6 +2,7 @@
 import rospy
 import actionlib
 
+from std_msgs.msg import Bool
 from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
 
 from ropod_ros_msgs.srv import GetDoorStatus, GetDoorStatusRequest
@@ -92,6 +93,7 @@ class ElevatorNavigation(FTSMBase):
                                                  dependency_monitors)
 
         self.mn_nav_topic = rospy.get_param('~mn_nav_topic', '/route_navigation/goal')
+        self.mn_nav_cancel_topic = rospy.get_param('~mn_nav_cancel_topic', '/route_navigation/cancel')
         self.init_pose_topic = rospy.get_param('~init_pose_topic', '/initialpose')
         self.localisation_topic = rospy.get_param('~localisation_topic', '/amcl_pose')
 
@@ -124,6 +126,9 @@ class ElevatorNavigation(FTSMBase):
         try:
             rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.mn_nav_topic))
             self.mn_nav_pub = rospy.Publisher(self.mn_nav_topic, ManeuverNavigationGoal, queue_size=1)
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.mn_nav_cancel_topic))
+            self.mn_nav_cancel_pub = rospy.Publisher(self.mn_nav_cancel_topic, Bool, queue_size=1)
 
             rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.init_pose_topic))
             self.init_pose_pub = rospy.Publisher(self.init_pose_topic,
@@ -209,8 +214,8 @@ class ElevatorNavigation(FTSMBase):
         # TODO (remove): waiting for a while to give the FTSM time to change the state
         rospy.sleep(0.5)
 
+        current_action_result = None
         try:
-            current_action_result = None
             if action_type == 'WAIT_FOR_ELEVATOR':
                 current_action_result = self.handle_wait_for_elevator()
             elif action_type == 'ENTER_ELEVATOR':
@@ -222,14 +227,18 @@ class ElevatorNavigation(FTSMBase):
             else:
                 rospy.logerr('[elevator_nav] Unknown action "{0}" received; ignoring request'.format(action_type))
                 current_action_result = NavElevatorResult(success=False)
+        except:
+            rospy.logerr('[elevator_nav] An error occurred while executing "{0}" action; aborting request'.format(action_type))
+            current_action_result = NavElevatorResult(success=False)
 
+        if self.elevator_nav_server.is_preempt_requested():
+            self.__cleanup_elevator_nav()
+            self.elevator_nav_server.set_preempted()
+        else:
             if current_action_result.success:
                 self.elevator_nav_server.set_succeeded(current_action_result)
             else:
                 self.elevator_nav_server.set_aborted(current_action_result)
-        except:
-            rospy.logerr('[elevator_nav] An error occurred while executing "{0}" action; aborting request'.format(action_type))
-            self.elevator_nav_server.set_aborted(NavElevatorResult(success=False))
 
         # setting self.elevator_nav_data.current_action to None
         # allows the FTSM to transition to the ready state
@@ -255,12 +264,18 @@ class ElevatorNavigation(FTSMBase):
         while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                        self.elevator_nav_data.waiting_pose,
                                        self.pos_tolerance_m,
-                                       self.orientation_tolerance_rad) and has_timed_out(start_time, self.go_to_elevator_timeout):
+                                       self.orientation_tolerance_rad) and \
+              not has_timed_out(start_time, self.go_to_elevator_timeout) and \
+              not self.elevator_nav_server.is_preempt_requested():
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
-        # if the elevator waypoint could not be achieved, we give up and return a failure
-        if not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+        # if the elevator waypoint could not be achieved or the action has been preempted,
+        # we give up and return a failure
+        if self.elevator_nav_server.is_preempt_requested():
+            rospy.logwarn('[elevator_nav] WAIT_FOR_ELEVATOR action preempted')
+            return NavElevatorResult(success=False)
+        elif not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                     self.elevator_nav_data.waiting_pose,
                                     self.pos_tolerance_m,
                                     self.orientation_tolerance_rad):
@@ -270,12 +285,18 @@ class ElevatorNavigation(FTSMBase):
         # we wait for the elevator door to open
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Waiting for elevator door to open')
-        while not self.is_door_open() and has_timed_out(start_time, self.wait_for_elevator_timeout):
+        while not self.is_door_open() and \
+              not has_timed_out(start_time, self.wait_for_elevator_timeout) and \
+              not self.elevator_nav_server.is_preempt_requested():
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
-        # if the door waiting has timed out, we give up and return a failure
-        if not self.is_door_open():
+        # if the door waiting has timed out or the action has been preempted,
+        # we give up and return a failure
+        if self.elevator_nav_server.is_preempt_requested():
+            rospy.logwarn('[elevator_nav] WAIT_FOR_ELEVATOR action preempted')
+            return NavElevatorResult(success=False)
+        elif not self.is_door_open():
             rospy.logerr('[elevator_nav] Elevator door did not open within the allotted time; giving up')
             return NavElevatorResult(success=False)
 
@@ -299,12 +320,18 @@ class ElevatorNavigation(FTSMBase):
         while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                        self.elevator_nav_data.inside_elevator_pose,
                                        self.pos_tolerance_m,
-                                       self.orientation_tolerance_rad) and has_timed_out(start_time, self.enter_elevator_timeout):
+                                       self.orientation_tolerance_rad) and \
+              not has_timed_out(start_time, self.enter_elevator_timeout) and \
+              not self.elevator_nav_server.is_preempt_requested():
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
-        # if the elevator waypoint could not be achieved, we give up and return a failure
-        if not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+        # if the elevator waypoint could not be achieved or the action has been preempted,
+        # we give up and return a failure
+        if self.elevator_nav_server.is_preempt_requested():
+            rospy.logwarn('[elevator_nav] ENTER_ELEVATOR action preempted')
+            return NavElevatorResult(success=False)
+        elif not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                     self.elevator_nav_data.inside_elevator_pose,
                                     self.pos_tolerance_m,
                                     self.orientation_tolerance_rad):
@@ -319,12 +346,17 @@ class ElevatorNavigation(FTSMBase):
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Taking elevator to floor {0}'.format(self.elevator_nav_data.current_action.goal_floor))
         while not self.is_destination_floor_reached(self.elevator_nav_data.current_action.goal_floor) and \
-                has_timed_out(start_time, self.ride_elevator_timeout):
+                not has_timed_out(start_time, self.ride_elevator_timeout) and \
+                not self.elevator_nav_server.is_preempt_requested():
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
-        # if the wait has timed out, we give up and return a failure
-        if not self.is_destination_floor_reached(self.elevator_nav_data.current_action.goal_floor):
+        # if the wait has timed out or the action has been preempted,
+        # we give up and return a failure
+        if self.elevator_nav_server.is_preempt_requested():
+            rospy.logwarn('[elevator_nav] RIDE_ELEVATOR action preempted')
+            return NavElevatorResult(success=False)
+        elif not self.is_destination_floor_reached(self.elevator_nav_data.current_action.goal_floor):
             rospy.logerr('[elevator_nav] Elevator ride has not completed within the allotted time; giving up')
             return NavElevatorResult(success=False)
 
@@ -357,12 +389,17 @@ class ElevatorNavigation(FTSMBase):
         while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                        outside_area_pose,
                                        self.pos_tolerance_m,
-                                       self.orientation_tolerance_rad) and has_timed_out(start_time, self.exit_elevator_timeout):
+                                       self.orientation_tolerance_rad) and \
+              not has_timed_out(start_time, self.exit_elevator_timeout) and \
+              not self.elevator_nav_server.is_preempt_requested():
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
 
         # if the outside waypoint could not be achieved, we give up and return a failure
-        if not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+        if self.elevator_nav_server.is_preempt_requested():
+            rospy.logwarn('[elevator_nav] EXIT_ELEVATOR action preempted')
+            return NavElevatorResult(success=False)
+        elif not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                     outside_area_pose,
                                     self.pos_tolerance_m,
                                     self.orientation_tolerance_rad):
@@ -533,6 +570,13 @@ class ElevatorNavigation(FTSMBase):
 
         '''
         self.elevator_nav_data.base_pose = pose_msg
+
+    def __cleanup_elevator_nav(self):
+        '''Cancels any ongoing navigation goals.
+        '''
+        cancel_nav_msg = Bool()
+        cancel_nav_msg.data = True
+        self.mn_nav_cancel_pub.publish(cancel_nav_msg)
 
     def __reset_elevator_nav(self):
         '''Resets self.elevator_nav_data.
