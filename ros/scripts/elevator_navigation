@@ -200,28 +200,39 @@ class ElevatorNavigation(FTSMBase):
 
     def get_action(self, action_request):
         rospy.loginfo('[elevator_nav] Action request received: "{0}"'.format(action_request.action.type))
+
+        # setting self.elevator_nav_data.current_action
+        # allows the FTSM to transition to the running state
         self.elevator_nav_data.current_action = action_request.action
+        action_type = self.elevator_nav_data.current_action.type
 
         # TODO (remove): waiting for a while to give the FTSM time to change the state
         rospy.sleep(0.5)
 
-        current_action_result = None
-        if self.elevator_nav_data.current_action.type == 'WAIT_FOR_ELEVATOR':
-            current_action_result = self.handle_wait_for_elevator()
-        elif self.elevator_nav_data.current_action.type == 'ENTER_ELEVATOR':
-            current_action_result = self.handle_enter_elevator()
-        elif self.elevator_nav_data.current_action.type == 'RIDE_ELEVATOR':
-            current_action_result = self.handle_ride_elevator()
-        elif self.elevator_nav_data.current_action.type == 'EXIT_ELEVATOR':
-            current_action_result = self.handle_exit_elevator()
-        else:
-            rospy.logerr('[elevator_nav] Unknown action "{0}" received; ignoring request'.format(self.elevator_nav_data.current_action.type))
-            current_action_result = NavElevatorResult(success=False)
+        try:
+            current_action_result = None
+            if action_type == 'WAIT_FOR_ELEVATOR':
+                current_action_result = self.handle_wait_for_elevator()
+            elif action_type == 'ENTER_ELEVATOR':
+                current_action_result = self.handle_enter_elevator()
+            elif action_type == 'RIDE_ELEVATOR':
+                current_action_result = self.handle_ride_elevator()
+            elif action_type == 'EXIT_ELEVATOR':
+                current_action_result = self.handle_exit_elevator()
+            else:
+                rospy.logerr('[elevator_nav] Unknown action "{0}" received; ignoring request'.format(action_type))
+                current_action_result = NavElevatorResult(success=False)
 
-        if current_action_result.success:
-            self.elevator_nav_server.set_succeeded(current_action_result)
-        else:
-            self.elevator_nav_server.set_aborted(current_action_result)
+            if current_action_result.success:
+                self.elevator_nav_server.set_succeeded(current_action_result)
+            else:
+                self.elevator_nav_server.set_aborted(current_action_result)
+        except:
+            rospy.logerr('[elevator_nav] An error occurred while executing "{0}" action; aborting request'.format(action_type))
+            self.elevator_nav_server.set_aborted(NavElevatorResult(success=False))
+
+        # setting self.elevator_nav_data.current_action to None
+        # allows the FTSM to transition to the ready state
         self.elevator_nav_data.current_action = None
 
     def handle_wait_for_elevator(self):
@@ -271,6 +282,10 @@ class ElevatorNavigation(FTSMBase):
         return NavElevatorResult(success=True)
 
     def handle_enter_elevator(self):
+        if self.elevator_nav_data.inside_elevator_pose is None:
+            rospy.logerr('[elevator_nav] Cannot execute ENTER_ELEVATOR action since the elevator location is not known (this might indicate a missing WAIT_FOR_ELEVATOR call)')
+            return NavElevatorResult(success=False)
+
         feedback_msg = NavElevatorFeedback()
 
         # we send a navigation goal to the waypoint inside the elevator and wait
@@ -302,7 +317,7 @@ class ElevatorNavigation(FTSMBase):
 
         # we wait for the destination floor to be reached or for the wait to time out
         start_time = rospy.get_time()
-        rospy.loginfo('[elevator_nav] Riding elevator')
+        rospy.loginfo('[elevator_nav] Taking elevator to floor {0}'.format(self.elevator_nav_data.current_action.goal_floor))
         while not self.is_destination_floor_reached(self.elevator_nav_data.current_action.goal_floor) and \
                 has_timed_out(start_time, self.ride_elevator_timeout):
             self.elevator_nav_server.publish_feedback(feedback_msg)
@@ -323,6 +338,10 @@ class ElevatorNavigation(FTSMBase):
         return NavElevatorResult(success=True)
 
     def handle_exit_elevator(self):
+        if not self.elevator_nav_data.current_action.areas:
+            rospy.logerr('[elevator_nav] Cannot execute EXIT_ELEVATOR action since no exit area is specified')
+            return NavElevatorResult(success=False)
+
         feedback_msg = NavElevatorFeedback()
 
         # we query for a pose of the outside area given in the action message
