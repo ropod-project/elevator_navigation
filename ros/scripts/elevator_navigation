@@ -421,6 +421,7 @@ class ElevatorNavigation(FTSMBase):
                                self.elevator_nav_data.base_pose.pose.pose,
                                outside_area_pose)
 
+        start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Exiting elevator')
         while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                        outside_area_pose,
@@ -530,6 +531,7 @@ class ElevatorNavigation(FTSMBase):
             outside_area_pose.orientation.y = 0.
             outside_area_pose.orientation.z = 0.
             outside_area_pose.orientation.w = 1.
+            return outside_area_pose
         else:
             rospy.logerr('Topology information for area "{0}" could not be retrieved'.format(outside_area_id))
             raise Exception('Area topology information could not be retrieved')
@@ -597,7 +599,7 @@ class ElevatorNavigation(FTSMBase):
                 current_pose = PoseWithCovarianceStamped()
                 current_pose.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
                 current_pose.pose.pose = self.elevator_nav_data.base_pose.pose.pose
-                self.init_pose_publisher.publish(current_pose)
+                self.init_pose_pub.publish(current_pose)
                 rospy.loginfo('[elevator_nav] Localisation reinitialised')
                 return True
             else:
