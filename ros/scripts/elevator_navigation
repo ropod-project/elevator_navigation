@@ -258,6 +258,7 @@ class ElevatorNavigation(FTSMBase):
         self.elevator_nav_data.waiting_pose = waiting_pose
         self.elevator_nav_data.inside_elevator_pose = inside_pose
         self.elevator_nav_data.elevator_door_position = door_position
+        self.elevator_nav_data.elevator_id = self.elevator_nav_data.current_action.elevator.elevator_id
 
         # we send a navigation goal to the waypoint outside the elevator and wait
         # for the navigation to complete or time out
