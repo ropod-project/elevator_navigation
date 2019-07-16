@@ -17,9 +17,8 @@ from maneuver_navigation.msg import Goal as ManeuverNavigationGoal
 from pyftsm.ftsm import FTSMStates, FTSMTransitions
 from ropod.ftsm.ftsm_base import FTSMBase, DependMonitorTypes
 
-from elevator_navigation.elevator_nav_utils import (ElevatorNavData, has_timed_out, \
-                                                    is_waypoint_achieved, send_maneuver_nav_goal,
-                                                    get_feedback_msg_skeleton)
+from route_navigation.route_nav_utils import has_timed_out, is_waypoint_achieved, send_maneuver_nav_goal
+from elevator_navigation.elevator_nav_utils import ElevatorNavData, get_feedback_msg_skeleton
 
 class ElevatorNavigation(FTSMBase):
     '''Manages action calls for elevator navigation. The component subscribes to
