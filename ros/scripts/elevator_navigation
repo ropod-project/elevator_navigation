@@ -189,7 +189,7 @@ class ElevatorNavigation(FTSMBase):
                                                                     self.get_action, False)
             self.elevator_nav_server.start()
         except rospy.ServiceException as exc:
-            rospy.logerr('[elevator_nav] Initialisation error: "{0}"'.format(str(err)))
+            rospy.logerr('[elevator_nav] Initialisation error: "{0}"'.format(str(exc)))
             return FTSMTransitions.INIT_FAILED
 
         return FTSMTransitions.INITIALISED
@@ -584,13 +584,14 @@ class ElevatorNavigation(FTSMBase):
         destination_floor: int -- destination floor for the elevator ride
 
         '''
-        rospy.loginfo('[elevator_nav] Switching map to {1}'.format(switch_map_request.new_map))
         try:
             switch_map_request = SwitchMapRequest()
             switch_map_request.entry_wormhole = 'elevator_' + str(self.elevator_nav_data.elevator_id)
             switch_map_request.new_map = 'map_floor' + str(destination_floor)
+
+            rospy.loginfo('[elevator_nav] Switching map to {0}'.format(switch_map_request.new_map))
             switch_map_response = self.switch_map(switch_map_request)
-            if switch_map.response.success:
+            if switch_map_response.success:
                 rospy.loginfo('[elevator_nav] Map switched reinitialising localisation')
                 current_pose = PoseWithCovarianceStamped()
                 current_pose.header.frame_id = self.elevator_nav_data.base_pose.header.frame_id
