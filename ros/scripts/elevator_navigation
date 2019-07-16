@@ -74,6 +74,7 @@ class ElevatorNavigation(FTSMBase):
 
     '''
     mn_nav_pub = None
+    mn_nav_cancel_pub = None
     init_pose_pub = None
     localisation_sub = None
     get_door_status = None

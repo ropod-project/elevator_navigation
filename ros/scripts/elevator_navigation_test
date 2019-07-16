@@ -29,5 +29,4 @@ if __name__ == '__main__':
 
         rospy.loginfo('[elevator_nav_client] Result\n{0}'.format(elevator_nav_client.get_result()))
     except (KeyboardInterrupt, SystemExit):
-        print('{0} interrupted; exiting...'.format(elevator_navigation_node.name))
-        elevator_navigation_node.stop()
+        rospy.loginfo('elevator_navigation_test interrupted; exiting...')
