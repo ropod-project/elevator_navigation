@@ -4,12 +4,14 @@
 
 A ROS component that manages action calls for elevator navigation. The component subscribes to four different action types:
 
-* `WAIT_FOR_ELEVATOR`
-* `ENTER_ELEVATOR`
-* `RIDE_ELEVATOR`
-* `EXIT_ELEVATOR`
+1. `WAIT_FOR_ELEVATOR`
+2. `ENTER_ELEVATOR`
+3. `RIDE_ELEVATOR`
+4. `EXIT_ELEVATOR`
 
-The actions are exposed through a single action server.
+The actions are exposed through a single action server, such that action calls are assumed to be made in the above order. The split into four actions is made for the purposes of simplified fault tolerance, as each individual step of the sequence can be triggered and then monitored independently of the others.
+
+The component is embedded into a [fault-tolerant state machine](https://github.com/ropod-project/ftsm) and has [this specification](https://github.com/ropod-project/component-monitoring/blob/master/component_monitoring/component_config/robot/software/elevator_navigation.yaml).
 
 ## Dependencies
 
