@@ -136,9 +136,9 @@ class ElevatorNavigation(FTSMBase):
                                                  queue_size=1)
 
             rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.localisation_topic))
-            self.localisation_sub = rospy.Publisher(self.localisation_topic,
-                                                    PoseWithCovarianceStamped,
-                                                    self.__set_base_pose)
+            self.localisation_sub = rospy.Subscriber(self.localisation_topic,
+                                                     PoseWithCovarianceStamped,
+                                                     self.__set_base_pose)
 
 
             rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.door_status_detection_server))
