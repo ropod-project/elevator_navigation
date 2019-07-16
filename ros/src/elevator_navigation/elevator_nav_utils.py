@@ -60,6 +60,9 @@ def send_maneuver_nav_goal(goal_pub, frame_id, start_pose, goal_pose):
     goal_pose: geometry_msgs.msg.Pose -- goal pose for the navigation
 
     '''
+    # we remove any leading or trailing / from the frame_id
+    frame_id = frame_id.strip('/')
+
     nav_goal = ManeuverNavigationGoal()
     nav_goal.start.header.frame_id = frame_id
     nav_goal.start.header.stamp = rospy.Time.now()
