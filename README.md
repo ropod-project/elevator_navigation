@@ -29,6 +29,7 @@ The elevator navigation depends on the following other components:
 
 The component expects several parameters to be made available to the ROS parameter server:
 * `mn_nav_topic: str` -- name of a topic for sending maneuver navigation goals (default `/route_navigation/goal`)
+* `mn_nav_cancel_topic: str` -- name of a topic for cancelling maneuver navigation goals (default `/route_navigation/cancel`)
 * `init_pose_topic: str` -- name of a topic for initialising the pose of a robot (default `/initialpose`)
 * `localisation_topic: str` -- name of a topic on which localisation pose estimates are published (default `/amcl_pose`)
 * `elevator_nav_server_name: str` -- name of the action server exposed by the component (default `/ropod/take_elevator`)

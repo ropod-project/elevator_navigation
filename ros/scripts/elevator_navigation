@@ -34,6 +34,8 @@ class ElevatorNavigation(FTSMBase):
     The component expects several parameters to be made available to the ROS parameter server:
     mn_nav_topic: str -- name of a topic for sending maneuver
                          navigation goals (default /route_navigation/goal)
+    mn_nav_cancel_topic: str -- name of a topic for cancelling maneuver
+                                navigation goals (default /route_navigation/cancel)
     init_pose_topic: str -- name of a topic for initialising the pose
                             of a robot (default /initialpose)
     localisation_topic: str -- name of a topic on which localisation
