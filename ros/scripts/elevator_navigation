@@ -5,6 +5,7 @@ import rospy
 import actionlib
 
 from std_msgs.msg import Bool
+from std_srvs.srv import Empty, EmptyRequest
 from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
 
 from ropod_ros_msgs.srv import GetDoorStatus, GetDoorStatusRequest
@@ -80,6 +81,7 @@ class ElevatorNavigation(FTSMBase):
     localisation_sub = None
     get_door_status = None
     get_floor = None
+    update_floor_reference_measurement = None
     switch_map = None
     elevator_waypoints_client = None
     topology_node_client = None
@@ -113,6 +115,8 @@ class ElevatorNavigation(FTSMBase):
                                                             '/get_door_status')
         self.floor_detection_server = rospy.get_param('~floor_detection_server',
                                                       '/floor_detection_server')
+        self.update_floor_reference_measurement_server = rospy.get_param('~update_floor_reference_measurement_server',
+                                                                         '/update_floor_reference_measurement')
         self.map_switcher_server = rospy.get_param('~map_switcher_server',
                                                    '/map_switcher/change_map')
 
@@ -160,6 +164,13 @@ class ElevatorNavigation(FTSMBase):
 
             rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.floor_detection_server))
             self.get_floor = rospy.ServiceProxy(self.floor_detection_server, DetectFloor)
+
+
+            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.update_floor_reference_measurement_server))
+            rospy.wait_for_service(self.update_floor_reference_measurement_server, timeout=120)
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.update_floor_reference_measurement_server))
+            self.update_floor_reference_measurement = rospy.ServiceProxy(self.update_floor_reference_measurement_server, Empty)
 
 
             rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.map_switcher_server))
@@ -361,6 +372,9 @@ class ElevatorNavigation(FTSMBase):
             self.elevator_nav_server.publish_feedback(feedback_msg)
             return NavElevatorResult(success=False)
 
+        rospy.loginfo('[elevator_nav] Updating the reference measurement of the current floor')
+        self.update_ref_floor_measurement()
+
         feedback_msg.feedback.status.status_code = Status.GOAL_REACHED
         self.elevator_nav_server.publish_feedback(feedback_msg)
         return NavElevatorResult(success=True)
@@ -554,6 +568,17 @@ class ElevatorNavigation(FTSMBase):
                 return False
         except rospy.ServiceException as exc:
             rospy.logerr('[elevator_nav] Could not check the door status')
+            raise
+
+    def update_ref_floor_measurement(self):
+        '''Calls self.update_floor_reference_measurement. Raises a
+        rospy.ServiceException exception if there is a service call error.
+        '''
+        try:
+            empty_request = EmptyRequest()
+            self.update_floor_reference_measurement(empty_request)
+        except rospy.ServiceException as exc:
+            rospy.logerr('[elevator_nav] Could not update the reference floor measurement: {0}'.format(str(exc)))
             raise
 
     def is_destination_floor_reached(self, destination_floor):

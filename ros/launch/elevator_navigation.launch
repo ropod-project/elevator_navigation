@@ -11,6 +11,7 @@
         <param name="topology_node_server" type="str" value="/get_topology_node" />
         <param name="door_status_detection_server" type="str" value="/get_door_status" />
         <param name="floor_detection_server" type="str" value="/floor_detection_server" />
+        <param name="update_floor_reference_measurement_server" type="str" value="/update_floor_reference_measurement" />
         <param name="map_switcher_server" type="str" value="/map_switcher/change_map" />
 
         <param name="go_to_elevator_timeout" type="double" value="120" />
