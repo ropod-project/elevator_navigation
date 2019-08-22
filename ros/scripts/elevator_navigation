@@ -20,7 +20,8 @@ from maneuver_navigation.msg import Goal as ManeuverNavigationGoal
 from pyftsm.ftsm import FTSMStates, FTSMTransitions
 from ropod.ftsm.ftsm_base import FTSMBase, DependMonitorTypes
 
-from route_navigation.route_nav_utils import has_timed_out, is_waypoint_achieved, send_maneuver_nav_goal
+from route_navigation.route_nav_utils import (has_timed_out, is_waypoint_achieved, \
+                                              send_maneuver_nav_goal, ManeuverNavConfigParams)
 from elevator_navigation.elevator_nav_utils import ElevatorNavData, get_feedback_msg_skeleton
 
 class ElevatorNavigation(FTSMBase):
@@ -86,6 +87,8 @@ class ElevatorNavigation(FTSMBase):
     elevator_waypoints_client = None
     topology_node_client = None
     elevator_nav_server = None
+    nav_config_params = None
+
 
     def __init__(self):
         component_name = 'elevator_navigation'
@@ -131,6 +134,7 @@ class ElevatorNavigation(FTSMBase):
         self.orientation_tolerance_rad = np.radians(orientation_tolerance_deg)
 
         self.elevator_nav_data = ElevatorNavData()
+        self.nav_config_params = ManeuverNavConfigParams()
 
     def init(self):
         try:
@@ -277,7 +281,8 @@ class ElevatorNavigation(FTSMBase):
         # for the navigation to complete or time out
         send_maneuver_nav_goal(self.mn_nav_pub, self.elevator_nav_data.base_pose.header.frame_id,
                                self.elevator_nav_data.base_pose.pose.pose,
-                               self.elevator_nav_data.waiting_pose)
+                               self.elevator_nav_data.waiting_pose,
+                               self.nav_config_params)
 
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Going to elevator waiting point')
@@ -342,7 +347,8 @@ class ElevatorNavigation(FTSMBase):
         # for the navigation to complete or time out
         send_maneuver_nav_goal(self.mn_nav_pub, self.elevator_nav_data.base_pose.header.frame_id,
                                self.elevator_nav_data.base_pose.pose.pose,
-                               self.elevator_nav_data.inside_elevator_pose)
+                               self.elevator_nav_data.inside_elevator_pose,
+                               self.nav_config_params)
 
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Entering elevator')
@@ -435,7 +441,8 @@ class ElevatorNavigation(FTSMBase):
         # for the navigation to complete or time out
         send_maneuver_nav_goal(self.mn_nav_pub, self.elevator_nav_data.base_pose.header.frame_id,
                                self.elevator_nav_data.base_pose.pose.pose,
-                               outside_area_pose)
+                               outside_area_pose,
+                               self.nav_config_params)
 
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Exiting elevator')
