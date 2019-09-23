@@ -6,12 +6,13 @@ import actionlib
 
 from std_msgs.msg import Bool
 from std_srvs.srv import Empty, EmptyRequest
-from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped, PolygonStamped
 
 from ropod_ros_msgs.srv import GetDoorStatus, GetDoorStatusRequest
 from ropod_ros_msgs.msg import Status
 from ropod_ros_msgs.msg import GetElevatorWaypointsAction, GetElevatorWaypointsGoal
 from ropod_ros_msgs.msg import GetTopologyNodeAction, GetTopologyNodeGoal
+from ropod_ros_msgs.msg import GetShapeAction, GetShapeGoal
 from ropod_ros_msgs.msg import NavElevatorAction, NavElevatorFeedback, NavElevatorResult
 from floor_detection.srv import DetectFloor, DetectFloorRequest
 from map_switcher.srv import SwitchMap, SwitchMapRequest
@@ -22,7 +23,8 @@ from ropod.ftsm.ftsm_base import FTSMBase, DependMonitorTypes
 
 from route_navigation.route_nav_utils import (has_timed_out, is_waypoint_achieved, \
                                               send_maneuver_nav_goal, ManeuverNavConfigParams)
-from elevator_navigation.elevator_nav_utils import ElevatorNavData, get_feedback_msg_skeleton
+from elevator_navigation.elevator_nav_utils import (ElevatorNavData, get_feedback_msg_skeleton, \
+                                                    is_polygon_in_polygon)
 
 class ElevatorNavigation(FTSMBase):
     '''Manages action calls for elevator navigation. The component subscribes to
@@ -107,6 +109,7 @@ class ElevatorNavigation(FTSMBase):
         self.mn_nav_cancel_topic = rospy.get_param('~mn_nav_cancel_topic', '/route_navigation/cancel')
         self.init_pose_topic = rospy.get_param('~init_pose_topic', '/initialpose')
         self.localisation_topic = rospy.get_param('~localisation_topic', '/amcl_pose')
+        self.footprint_topic = rospy.get_param('~footprint_topic', '/maneuver_navigation/local_costmap/footprint')
 
         self.elevator_nav_server_name = rospy.get_param('~elevator_nav_server_name',
                                                         '/ropod/take_elevator')
@@ -122,6 +125,7 @@ class ElevatorNavigation(FTSMBase):
                                                                          '/update_floor_reference_measurement')
         self.map_switcher_server = rospy.get_param('~map_switcher_server',
                                                    '/map_switcher/change_map')
+        self.get_shape_server = rospy.get_param('~get_shape_server', '/get_shape')
 
         self.go_to_elevator_timeout = float(rospy.get_param('~go_to_elevator_timeout', 120.))
         self.wait_for_elevator_timeout = float(rospy.get_param('~wait_for_elevator_timeout', 120.))
@@ -149,11 +153,15 @@ class ElevatorNavigation(FTSMBase):
                                                  PoseWithCovarianceStamped,
                                                  queue_size=1)
 
-            rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.localisation_topic))
+            rospy.loginfo('[elevator_nav] Creating a "{0}" topic subscriber'.format(self.localisation_topic))
             self.localisation_sub = rospy.Subscriber(self.localisation_topic,
                                                      PoseWithCovarianceStamped,
                                                      self.__set_base_pose)
 
+            rospy.loginfo('[elevator_nav] Creating a "{0}" topic subscriber'.format(self.footprint_topic))
+            self.footprint_sub = rospy.Subscriber(self.footprint_topic,
+                                                     PolygonStamped,
+                                                     self.__footprint_cb)
 
             rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.door_status_detection_server))
             rospy.wait_for_service(self.door_status_detection_server, timeout=120)
@@ -204,6 +212,10 @@ class ElevatorNavigation(FTSMBase):
             self.elevator_nav_server = actionlib.SimpleActionServer(self.elevator_nav_server_name,
                                                                     NavElevatorAction,
                                                                     self.get_action, False)
+
+            rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.get_shape_server))
+            self.get_shape_client = actionlib.SimpleActionClient(self.get_shape_server,
+                                                                 GetShapeAction)
             self.elevator_nav_server.start()
         except rospy.ServiceException as exc:
             rospy.logerr('[elevator_nav] Initialisation error: "{0}"'.format(str(exc)))
@@ -343,6 +355,7 @@ class ElevatorNavigation(FTSMBase):
         feedback_msg = get_feedback_msg_skeleton(self.elevator_nav_data.current_action.action_id,
                                                  self.elevator_nav_data.current_action.type)
 
+        elevator_shape = self.get_elevator_shape(self.elevator_nav_data.elevator_id)
         # we send a navigation goal to the waypoint inside the elevator and wait
         # for the navigation to complete or time out
         send_maneuver_nav_goal(self.mn_nav_pub, self.elevator_nav_data.base_pose.header.frame_id,
@@ -352,15 +365,18 @@ class ElevatorNavigation(FTSMBase):
 
         start_time = rospy.get_time()
         rospy.loginfo('[elevator_nav] Entering elevator')
-        while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+        while not (is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                        self.elevator_nav_data.inside_elevator_pose,
                                        self.pos_tolerance_m,
-                                       self.orientation_tolerance_rad) and \
+                                       self.orientation_tolerance_rad) or \
+              is_polygon_in_polygon(self.robot_footprint, elevator_shape)) and \
               not has_timed_out(start_time, self.enter_elevator_timeout) and \
               not self.elevator_nav_server.is_preempt_requested():
             feedback_msg.feedback.status.status_code = Status.ENTERING
             self.elevator_nav_server.publish_feedback(feedback_msg)
             rospy.sleep(0.5)
+
+        self.__cleanup_elevator_nav()
 
         # if the elevator waypoint could not be achieved or the action has been preempted,
         # we give up and return a failure
@@ -369,10 +385,15 @@ class ElevatorNavigation(FTSMBase):
             feedback_msg.feedback.status.status_code = Status.ELEVATOR_ACTION_PREEMPTED
             self.elevator_nav_server.publish_feedback(feedback_msg)
             return NavElevatorResult(success=False)
-        elif not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
+        elif (is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
                                     self.elevator_nav_data.inside_elevator_pose,
                                     self.pos_tolerance_m,
-                                    self.orientation_tolerance_rad):
+                                    self.orientation_tolerance_rad)):
+
+            rospy.loginfo('[elevator_nav] Enter elevator waypoint achieved')
+        elif is_polygon_in_polygon(self.robot_footprint, elevator_shape):
+            rospy.loginfo('[elevator_nav] Robot footprint is inside elevator')
+        else:
             rospy.logerr('[elevator_nav] Elevator could not be entered within the allotted time; giving up')
             feedback_msg.feedback.status.status_code = Status.ELEVATOR_ENTERING_FAILED
             self.elevator_nav_server.publish_feedback(feedback_msg)
@@ -559,6 +580,19 @@ class ElevatorNavigation(FTSMBase):
             rospy.logerr('Topology information for area "{0}" could not be retrieved'.format(outside_area_id))
             raise Exception('Area topology information could not be retrieved')
 
+    def get_elevator_shape(self, elevator_id):
+        goal = GetShapeGoal()
+        goal.id = elevator_id
+        goal.type = 'elevator'
+        self.get_shape_client.send_goal(goal)
+        shape_success = self.get_shape_client.wait_for_result(rospy.Duration.from_sec(5.0))
+        if shape_success:
+            shape_result = self.get_shape_client.get_result()
+            return shape_result.shape
+        else:
+            rospy.logerr('Shape for area "{0}" could not be retrieved'.format(elevator_id))
+            raise Exception('Area shape could not be retrieved')
+
     def is_door_open(self):
         '''Calls self.get_door_status and returns the current door status.
         Raises a rospy.ServiceException exception if there is a service call error.
@@ -642,6 +676,15 @@ class ElevatorNavigation(FTSMBase):
         except rospy.ServiceException as exc:
             rospy.logerr('[elevator_nav] Could not switch map: {0}'.format(str(exc)))
             raise
+
+    def __footprint_cb(self, footprint_msg):
+        '''Callback for receiving robot footprint
+
+        Keyword arguments:
+        polygon_msg: geometry_msgs.msg.PolygonStamped
+
+        '''
+        self.robot_footprint = footprint_msg.polygon
 
     def __set_base_pose(self, pose_msg):
         '''Sets self.elevator_nav_data.base_pose to the given argument.

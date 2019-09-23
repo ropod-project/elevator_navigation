@@ -5,6 +5,7 @@
         <param name="mn_nav_cancel_topic" type="str" value="/route_navigation/cancel" />
         <param name="init_pose_topic" type="str" value="/initialpose" />
         <param name="localisation_topic" type="str" value="/amcl_pose" />
+        <param name="footprint_topic" type="str" value="/maneuver_navigation/local_costmap/footprint" />
 
         <param name="elevator_nav_server_name" type="str" value="/ropod/take_elevator" />
         <param name="elevator_waypoints_server" type="str" value="/get_elevator_waypoints" />
@@ -13,6 +14,7 @@
         <param name="floor_detection_server" type="str" value="/floor_detection_server" />
         <param name="update_floor_reference_measurement_server" type="str" value="/update_floor_reference_measurement" />
         <param name="map_switcher_server" type="str" value="/map_switcher/change_map" />
+        <param name="get_shape_server" type="str" value="/get_shape" />
 
         <param name="go_to_elevator_timeout" type="double" value="120" />
         <param name="wait_for_elevator_timeout" type="double" value="120" />

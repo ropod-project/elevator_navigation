@@ -3,7 +3,8 @@ from tf import transformations as tf
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from maneuver_navigation.msg import Goal as ManeuverNavigationGoal
-from ropod_ros_msgs.msg import NavElevatorFeedback, Status
+from ropod_ros_msgs.msg import NavElevatorFeedback, Status, Position
+from cart_collection.cart_collection_utils import is_point_in_polygon
 
 class ElevatorNavData(object):
     def __init__(self):
@@ -32,3 +33,21 @@ def get_feedback_msg_skeleton(action_id, action_type):
     feedback_msg.feedback.status.domain = Status.COMPONENT
     feedback_msg.feedback.status.module_code = Status.ELEVATOR_ACTION
     return feedback_msg
+
+def is_polygon_in_polygon(polygon1, polygon2):
+    '''
+    Returns true if all points of polygon1 are contained within polygon2
+
+    polygon1: geometry_msgs.msg.Polygon -- polygon which is supposed to be
+                inside polygon2
+    polygon2: list of ropod_ros_msgs.msg.Position -- polygon which should
+                contain polygon1
+    '''
+
+    for p in polygon1.points:
+        ropod_point = Position()
+        ropod_point.x = p.x
+        ropod_point.y = p.y
+        if not is_point_in_polygon(ropod_point, polygon2.vertices):
+            return False
+    return True
