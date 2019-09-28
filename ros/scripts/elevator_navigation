@@ -14,7 +14,7 @@ from ropod_ros_msgs.msg import GetElevatorWaypointsAction, GetElevatorWaypointsG
 from ropod_ros_msgs.msg import GetTopologyNodeAction, GetTopologyNodeGoal
 from ropod_ros_msgs.msg import GetShapeAction, GetShapeGoal
 from ropod_ros_msgs.msg import NavElevatorAction, NavElevatorFeedback, NavElevatorResult
-from floor_detection.srv import DetectFloor, DetectFloorRequest
+from floor_detection.msg import DetectFloorAction, DetectFloorGoal
 from map_switcher.srv import SwitchMap, SwitchMapRequest
 from maneuver_navigation.msg import Goal as ManeuverNavigationGoal
 
@@ -83,11 +83,11 @@ class ElevatorNavigation(FTSMBase):
     init_pose_pub = None
     localisation_sub = None
     get_door_status = None
-    get_floor = None
     update_floor_reference_measurement = None
     switch_map = None
     elevator_waypoints_client = None
     topology_node_client = None
+    get_floor_client = None
     elevator_nav_server = None
     nav_config_params = None
 
@@ -505,8 +505,7 @@ class ElevatorNavigation(FTSMBase):
         topology_node_goal.type = 'local_area'
 
         self.topology_node_client.send_goal(topology_node_goal)
-        topology_client_completed = self.topology_node_client.wait_for_result(rospy.Duration.from_sec(10.))
-        if topology_client_completed:
+        if self.topology_node_client.wait_for_result(rospy.Duration.from_sec(10.)):
             topology_client_result = self.topology_node_client.get_result()
 
             outside_area_pose = Pose()
@@ -531,8 +530,7 @@ class ElevatorNavigation(FTSMBase):
         goal.id = elevator_id
         goal.type = 'elevator'
         self.get_shape_client.send_goal(goal)
-        shape_success = self.get_shape_client.wait_for_result(rospy.Duration.from_sec(5.0))
-        if shape_success:
+        if self.get_shape_client.wait_for_result(rospy.Duration.from_sec(5.0)):
             shape_result = self.get_shape_client.get_result()
             return shape_result.shape
         else:
@@ -569,24 +567,24 @@ class ElevatorNavigation(FTSMBase):
             raise
 
     def is_destination_floor_reached(self, destination_floor):
-        '''Calls self.get_floor and returns True if the current floor as obtained
-        from the service call equals the destination floor; returns False otherwise.
-        Raises a rospy.ServiceException exception if there is a service call error.
+        '''Makes a call to self.floor_detection_server and returns True
+        if the current floor as obtained from the action call equals
+        the destination floor; returns False otherwise.
 
         Keyword arguments:
         destination_floor: int -- destination floor for the elevator ride
 
         '''
-        try:
-            get_floor_request = DetectFloorRequest()
-            get_floor_response = self.get_floor(get_floor_request)
-            if get_floor_response.floor == destination_floor:
+        self.get_floor_client.send_goal(DetectFloorGoal())
+        if self.get_floor_client.wait_for_result(rospy.Duration.from_sec(10.)):
+            get_floor_result = self.get_floor_client.get_result()
+            if get_floor_result.floor == destination_floor:
                 rospy.loginfo('[elevator_nav] Reached floor {0}'.format(destination_floor))
                 return True
             return False
-        except rospy.ServiceException as exc:
+        else:
             rospy.logerr('[elevator_nav] Could not get the current floor: {0}'.format(str(exc)))
-            raise
+            raise Exception('Current floor could not be retrieved')
 
     def load_new_map(self, destination_floor):
         '''Calls self.switch_map to load a map of the current floor and relocalises
@@ -659,13 +657,6 @@ class ElevatorNavigation(FTSMBase):
                                                          GetDoorStatus)
 
 
-        rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.floor_detection_server))
-        rospy.wait_for_service(self.floor_detection_server, timeout=120)
-
-        rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.floor_detection_server))
-        self.get_floor = rospy.ServiceProxy(self.floor_detection_server, DetectFloor)
-
-
         rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.update_floor_reference_measurement_server))
         rospy.wait_for_service(self.update_floor_reference_measurement_server, timeout=120)
 
@@ -700,8 +691,16 @@ class ElevatorNavigation(FTSMBase):
         self.get_shape_client = actionlib.SimpleActionClient(self.get_shape_server,
                                                              GetShapeAction)
 
-        rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.get_shape_client))
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.get_shape_server))
         self.get_shape_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
+
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" action server'.format(self.floor_detection_server))
+        self.get_floor_client = actionlib.SimpleActionClient(self.floor_detection_server,
+                                                             DetectFloorAction)
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.floor_detection_server))
+        self.get_floor_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
 
 
         rospy.loginfo('[elevator_nav] Creating a "{0}" action server'.format(self.elevator_nav_server_name))
@@ -720,12 +719,14 @@ class ElevatorNavigation(FTSMBase):
         self.footprint_sub.unregister()
 
         self.get_door_status.shutdown()
-        self.get_floor.shutdown()
         self.update_floor_reference_measurement.shutdown()
         self.switch_map.shutdown()
+
         self.shutdown_action_client(self.elevator_waypoints_client)
         self.shutdown_action_client(self.topology_node_client)
         self.shutdown_action_client(self.get_shape_client)
+        self.shutdown_action_client(self.get_floor_client)
+
         self.shutdown_action_server(self.elevator_nav_server)
 
     def __footprint_cb(self, footprint_msg):
