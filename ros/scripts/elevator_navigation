@@ -96,8 +96,8 @@ class ElevatorNavigation(FTSMBase):
         component_name = 'elevator_navigation'
         dependencies = ['roscore', 'world_model_mediator', 'door_status_detector',
                         'floor_detector', 'map_switcher']
-        dependency_monitors = {'functional': {'roscore': 'ros/ros_master_monitor',
-                                              'world_model_mediator': 'ros/ros_node_monitor',
+        dependency_monitors = {'heartbeat': {'roscore': 'ros/ros_master_monitor'},
+                               'functional': {'world_model_mediator': 'ros/ros_node_monitor',
                                               'door_status_detector': 'ros/ros_node_monitor',
                                               'floor_detector': 'ros/ros_node_monitor',
                                               'map_switcher': 'ros/ros_node_monitor'}}
@@ -142,99 +142,45 @@ class ElevatorNavigation(FTSMBase):
 
     def init(self):
         try:
-            rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.mn_nav_topic))
-            self.mn_nav_pub = rospy.Publisher(self.mn_nav_topic, ManeuverNavigationGoal, queue_size=1)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.mn_nav_cancel_topic))
-            self.mn_nav_cancel_pub = rospy.Publisher(self.mn_nav_cancel_topic, Bool, queue_size=1)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.init_pose_topic))
-            self.init_pose_pub = rospy.Publisher(self.init_pose_topic,
-                                                 PoseWithCovarianceStamped,
-                                                 queue_size=1)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" topic subscriber'.format(self.localisation_topic))
-            self.localisation_sub = rospy.Subscriber(self.localisation_topic,
-                                                     PoseWithCovarianceStamped,
-                                                     self.__set_base_pose)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" topic subscriber'.format(self.footprint_topic))
-            self.footprint_sub = rospy.Subscriber(self.footprint_topic,
-                                                     PolygonStamped,
-                                                     self.__footprint_cb)
-
-            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.door_status_detection_server))
-            rospy.wait_for_service(self.door_status_detection_server, timeout=120)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.door_status_detection_server))
-            self.get_door_status = rospy.ServiceProxy(self.door_status_detection_server,
-                                                             GetDoorStatus)
-
-
-            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.floor_detection_server))
-            rospy.wait_for_service(self.floor_detection_server, timeout=120)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.floor_detection_server))
-            self.get_floor = rospy.ServiceProxy(self.floor_detection_server, DetectFloor)
-
-
-            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.update_floor_reference_measurement_server))
-            rospy.wait_for_service(self.update_floor_reference_measurement_server, timeout=120)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.update_floor_reference_measurement_server))
-            self.update_floor_reference_measurement = rospy.ServiceProxy(self.update_floor_reference_measurement_server, Empty)
-
-
-            rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.map_switcher_server))
-            rospy.wait_for_service(self.map_switcher_server, timeout=120)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.map_switcher_server))
-            self.switch_map = rospy.ServiceProxy(self.map_switcher_server, SwitchMap)
-
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.elevator_waypoints_server))
-            self.elevator_waypoints_client = actionlib.SimpleActionClient(self.elevator_waypoints_server,
-                                                                          GetElevatorWaypointsAction)
-
-            rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.elevator_waypoints_server))
-            self.elevator_waypoints_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
-
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.topology_node_server))
-            self.topology_node_client = actionlib.SimpleActionClient(self.topology_node_server,
-                                                                     GetTopologyNodeAction)
-
-            rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.topology_node_server))
-            self.topology_node_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
-
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" action server'.format(self.elevator_nav_server_name))
-            self.elevator_nav_server = actionlib.SimpleActionServer(self.elevator_nav_server_name,
-                                                                    NavElevatorAction,
-                                                                    self.get_action, False)
-
-            rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.get_shape_server))
-            self.get_shape_client = actionlib.SimpleActionClient(self.get_shape_server,
-                                                                 GetShapeAction)
-            self.elevator_nav_server.start()
+            print('[elevator_navigation] Initialising...')
+            self.setup_ros()
+            print('[elevator_navigation] Initialisation completed')
         except rospy.ServiceException as exc:
             rospy.logerr('[elevator_nav] Initialisation error: "{0}"'.format(str(exc)))
             return FTSMTransitions.INIT_FAILED
-
         return FTSMTransitions.INITIALISED
 
     def ready(self):
+        status_transition = self.process_depend_statuses()
+        if status_transition:
+            return status_transition
+
         if not self.elevator_nav_data.current_action:
             return FTSMTransitions.WAIT
         return FTSMTransitions.RUN
 
     def running(self):
+        status_transition = self.process_depend_statuses()
+        if status_transition:
+            return status_transition
+
         if not self.elevator_nav_data.current_action:
             return FTSMTransitions.DONE
         return FTSMTransitions.CONTINUE
 
     def recovering(self):
+        self.recover_from_possible_dead_rosmaster()
         return FTSMTransitions.DONE_RECOVERING
+
+    def process_depend_statuses(self):
+        '''Returns FTSMTransitions.RECOVER if the ROS master
+        is unavailable; returns None otherwise.
+        '''
+        master_available = self.depend_statuses[DependMonitorTypes.HEARTBEAT]\
+                                               ['roscore']['ros/ros_master_monitor']['status']
+        if not master_available:
+            rospy.logwarn('[elevator_navigation] roscore not available; trying to recover')
+            return FTSMTransitions.RECOVER
 
     def get_action(self, action_request):
         rospy.loginfo('[elevator_nav] Action request received: "{0}"'.format(action_request.action.type))
@@ -676,6 +622,111 @@ class ElevatorNavigation(FTSMBase):
         except rospy.ServiceException as exc:
             rospy.logerr('[elevator_nav] Could not switch map: {0}'.format(str(exc)))
             raise
+
+    def setup_ros(self):
+        print('[elevator_nav] Initialising ROS node')
+        rospy.init_node('elevator_navigation')
+
+        # we sleep shortly to give the node time to initialise
+        rospy.sleep(0.5)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.mn_nav_topic))
+        self.mn_nav_pub = rospy.Publisher(self.mn_nav_topic, ManeuverNavigationGoal, queue_size=1)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.mn_nav_cancel_topic))
+        self.mn_nav_cancel_pub = rospy.Publisher(self.mn_nav_cancel_topic, Bool, queue_size=1)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.init_pose_topic))
+        self.init_pose_pub = rospy.Publisher(self.init_pose_topic,
+                                             PoseWithCovarianceStamped,
+                                             queue_size=1)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" topic subscriber'.format(self.localisation_topic))
+        self.localisation_sub = rospy.Subscriber(self.localisation_topic,
+                                                 PoseWithCovarianceStamped,
+                                                 self.__set_base_pose)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" topic subscriber'.format(self.footprint_topic))
+        self.footprint_sub = rospy.Subscriber(self.footprint_topic,
+                                                 PolygonStamped,
+                                                 self.__footprint_cb)
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.door_status_detection_server))
+        rospy.wait_for_service(self.door_status_detection_server, timeout=120)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.door_status_detection_server))
+        self.get_door_status = rospy.ServiceProxy(self.door_status_detection_server,
+                                                         GetDoorStatus)
+
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.floor_detection_server))
+        rospy.wait_for_service(self.floor_detection_server, timeout=120)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.floor_detection_server))
+        self.get_floor = rospy.ServiceProxy(self.floor_detection_server, DetectFloor)
+
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.update_floor_reference_measurement_server))
+        rospy.wait_for_service(self.update_floor_reference_measurement_server, timeout=120)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.update_floor_reference_measurement_server))
+        self.update_floor_reference_measurement = rospy.ServiceProxy(self.update_floor_reference_measurement_server, Empty)
+
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.map_switcher_server))
+        rospy.wait_for_service(self.map_switcher_server, timeout=120)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.map_switcher_server))
+        self.switch_map = rospy.ServiceProxy(self.map_switcher_server, SwitchMap)
+
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.elevator_waypoints_server))
+        self.elevator_waypoints_client = actionlib.SimpleActionClient(self.elevator_waypoints_server,
+                                                                      GetElevatorWaypointsAction)
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.elevator_waypoints_server))
+        self.elevator_waypoints_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
+
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.topology_node_server))
+        self.topology_node_client = actionlib.SimpleActionClient(self.topology_node_server,
+                                                                 GetTopologyNodeAction)
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.topology_node_server))
+        self.topology_node_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
+
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.get_shape_server))
+        self.get_shape_client = actionlib.SimpleActionClient(self.get_shape_server,
+                                                             GetShapeAction)
+
+        rospy.loginfo('[elevator_nav] Waiting for "{0}" action server'.format(self.get_shape_client))
+        self.get_shape_client.wait_for_server(timeout=rospy.Duration.from_sec(120.))
+
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" action server'.format(self.elevator_nav_server_name))
+        self.elevator_nav_server = actionlib.SimpleActionServer(self.elevator_nav_server_name,
+                                                                NavElevatorAction,
+                                                                self.get_action, False)
+
+        self.elevator_nav_server.start()
+
+    def tear_down_ros(self):
+        print('[elevator_navigation] Tearing down ROS node')
+        self.mn_nav_pub.unregister()
+        self.mn_nav_cancel_pub.unregister()
+        self.init_pose_pub.unregister()
+        self.localisation_sub.unregister()
+        self.footprint_sub.unregister()
+
+        self.get_door_status.shutdown()
+        self.get_floor.shutdown()
+        self.update_floor_reference_measurement.shutdown()
+        self.switch_map.shutdown()
+        self.shutdown_action_client(self.elevator_waypoints_client)
+        self.shutdown_action_client(self.topology_node_client)
+        self.shutdown_action_client(self.get_shape_client)
+        self.shutdown_action_server(self.elevator_nav_server)
 
     def __footprint_cb(self, footprint_msg):
         '''Callback for receiving robot footprint
