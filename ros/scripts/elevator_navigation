@@ -8,7 +8,7 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Empty, EmptyRequest
 from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped, PolygonStamped
 
-from ropod_ros_msgs.srv import GetDoorStatus, GetDoorStatusRequest
+from door_status_detection.msg import GetDoorStatusAction, GetDoorStatusGoal
 from ropod_ros_msgs.msg import Status
 from ropod_ros_msgs.msg import GetElevatorWaypointsAction, GetElevatorWaypointsGoal
 from ropod_ros_msgs.msg import GetTopologyNodeAction, GetTopologyNodeGoal
@@ -51,7 +51,7 @@ class ElevatorNavigation(FTSMBase):
                                       elevator waypoint queries (default /get_elevator_waypoints)
     topology_node_server: str -- name of a server that responds to queries regarding
                                  area topologies (default /get_topology_node)
-    door_status_detection_server: str -- name of a service for checking whether a door
+    door_status_detection_server: str -- name of an action server for checking whether a door
                                          is open or closed (default /get_door_status)
     floor_detection_server: str -- name of a service that returns the currrent floor
                                    of a robot (default /floor_detection_server)
@@ -539,21 +539,17 @@ class ElevatorNavigation(FTSMBase):
 
     def is_door_open(self):
         '''Calls self.get_door_status and returns the current door status.
-        Raises a rospy.ServiceException exception if there is a service call error.
         '''
-        door_status_request = GetDoorStatusRequest()
-        door_status_request.robot_pose = self.elevator_nav_data.base_pose.pose.pose
-        door_status_request.door_position = self.elevator_nav_data.elevator_door_position
-
-        try:
-            door_status_response = self.get_door_status(door_status_request)
-            if door_status_response.status:
-                return True
-            else:
-                return False
-        except rospy.ServiceException as exc:
+        door_status_goal = GetDoorStatusGoal()
+        door_status_goal.robot_pose = self.elevator_nav_data.base_pose.pose.pose
+        door_status_goal.door_position = self.elevator_nav_data.elevator_door_position
+        self.get_door_status.send_goal(door_status_goal)
+        if self.get_door_status.wait_for_result(rospy.Duration.from_sec(5.0)):
+            door_status_result = self.get_door_status.get_result()
+            return door_status_result.is_open
+        else:
             rospy.logerr('[elevator_nav] Could not check the door status')
-            raise
+            raise Exception('Door status could not be retrieved')
 
     def update_ref_floor_measurement(self):
         '''Calls self.update_floor_reference_measurement. Raises a
@@ -649,12 +645,8 @@ class ElevatorNavigation(FTSMBase):
                                                  PolygonStamped,
                                                  self.__footprint_cb)
 
-        rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.door_status_detection_server))
-        rospy.wait_for_service(self.door_status_detection_server, timeout=120)
-
-        rospy.loginfo('[elevator_nav] Creating a "{0}" service proxy'.format(self.door_status_detection_server))
-        self.get_door_status = rospy.ServiceProxy(self.door_status_detection_server,
-                                                         GetDoorStatus)
+        rospy.loginfo('[elevator_nav] Creating a "{0}" action client'.format(self.door_status_detection_server))
+        self.get_door_status = actionlib.SimpleActionClient(self.door_status_detection_server, GetDoorStatusAction)
 
 
         rospy.loginfo('[elevator_nav] Waiting for "{0}" service'.format(self.update_floor_reference_measurement_server))
@@ -718,10 +710,10 @@ class ElevatorNavigation(FTSMBase):
         self.localisation_sub.unregister()
         self.footprint_sub.unregister()
 
-        self.get_door_status.shutdown()
         self.update_floor_reference_measurement.shutdown()
         self.switch_map.shutdown()
 
+        self.shutdown_action_client(self.get_door_status)
         self.shutdown_action_client(self.elevator_waypoints_client)
         self.shutdown_action_client(self.topology_node_client)
         self.shutdown_action_client(self.get_shape_client)
