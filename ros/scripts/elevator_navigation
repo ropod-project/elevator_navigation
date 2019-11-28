@@ -81,6 +81,7 @@ class ElevatorNavigation(FTSMBase):
     mn_nav_pub = None
     mn_nav_cancel_pub = None
     init_pose_pub = None
+    clear_costmap_pub = None
     localisation_sub = None
     get_door_status = None
     update_floor_reference_measurement = None
@@ -110,6 +111,7 @@ class ElevatorNavigation(FTSMBase):
         self.init_pose_topic = rospy.get_param('~init_pose_topic', '/initialpose')
         self.localisation_topic = rospy.get_param('~localisation_topic', '/amcl_pose')
         self.footprint_topic = rospy.get_param('~footprint_topic', '/maneuver_navigation/local_costmap/footprint')
+        self.clear_costmap_topic = rospy.get_param('~clear_costmap_topic', '/route_navigation/clear_costmap')
 
         self.elevator_nav_server_name = rospy.get_param('~elevator_nav_server_name',
                                                         '/ropod/take_elevator')
@@ -389,6 +391,9 @@ class ElevatorNavigation(FTSMBase):
             self.elevator_nav_server.publish_feedback(feedback_msg)
             return NavElevatorResult(success=False)
 
+        rospy.loginfo('[elevator_nav] Requesting costmap clearing')
+        self.clear_costmap_pub.publish(Bool(data=True))
+
         feedback_msg.feedback.status.status_code = Status.GOAL_REACHED
         self.elevator_nav_server.publish_feedback(feedback_msg)
         return NavElevatorResult(success=True)
@@ -634,6 +639,9 @@ class ElevatorNavigation(FTSMBase):
         self.init_pose_pub = rospy.Publisher(self.init_pose_topic,
                                              PoseWithCovarianceStamped,
                                              queue_size=1)
+
+        rospy.loginfo('[elevator_nav] Creating a "{0}" topic publisher'.format(self.clear_costmap_topic))
+        self.clear_costmap_pub = rospy.Publisher(self.clear_costmap_topic, Bool, queue_size=1)
 
         rospy.loginfo('[elevator_nav] Creating a "{0}" topic subscriber'.format(self.localisation_topic))
         self.localisation_sub = rospy.Subscriber(self.localisation_topic,

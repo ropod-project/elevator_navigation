@@ -6,6 +6,7 @@
         <param name="init_pose_topic" type="str" value="/initialpose" />
         <param name="localisation_topic" type="str" value="/amcl_pose" />
         <param name="footprint_topic" type="str" value="/maneuver_navigation/local_costmap/footprint" />
+        <param name="clear_costmap_topic" type="str" value="/route_navigation/clear_costmap" />
 
         <param name="elevator_nav_server_name" type="str" value="/ropod/take_elevator" />
         <param name="elevator_waypoints_server" type="str" value="/get_elevator_waypoints" />
