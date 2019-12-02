@@ -39,6 +39,8 @@ class ElevatorNavigation(FTSMBase):
     The component expects several parameters to be made available to the ROS parameter server:
     mn_nav_topic: str -- name of a topic for sending maneuver
                          navigation goals (default /route_navigation/goal)
+    mn_nav_feedback_topic: str -- name of a topic for sending maneuver
+                                  navigation goals (default /route_navigation/feedback)
     mn_nav_cancel_topic: str -- name of a topic for cancelling maneuver
                                 navigation goals (default /route_navigation/cancel)
     init_pose_topic: str -- name of a topic for initialising the pose
@@ -107,6 +109,7 @@ class ElevatorNavigation(FTSMBase):
                                                  dependency_monitors)
 
         self.mn_nav_topic = rospy.get_param('~mn_nav_topic', '/route_navigation/goal')
+        self.mn_nav_feedback_topic = rospy.get_param('~mn_nav_feedback_topic', '/route_navigation/feedback')
         self.mn_nav_cancel_topic = rospy.get_param('~mn_nav_cancel_topic', '/route_navigation/cancel')
         self.init_pose_topic = rospy.get_param('~init_pose_topic', '/initialpose')
         self.localisation_topic = rospy.get_param('~localisation_topic', '/amcl_pose')
@@ -134,10 +137,6 @@ class ElevatorNavigation(FTSMBase):
         self.enter_elevator_timeout = float(rospy.get_param('~enter_elevator_timeout', 120.))
         self.ride_elevator_timeout = float(rospy.get_param('~ride_elevator_timeout', 600.))
         self.exit_elevator_timeout = float(rospy.get_param('~exit_elevator_timeout', 120.))
-
-        self.pos_tolerance_m = float(rospy.get_param('~pos_tolerance_m', 0.3))
-        orientation_tolerance_deg = float(rospy.get_param('~orientation_tolerance_deg', 20.))
-        self.orientation_tolerance_rad = np.radians(orientation_tolerance_deg)
 
         self.elevator_nav_data = ElevatorNavData()
         self.nav_config_params = ManeuverNavConfigParams()
@@ -245,26 +244,22 @@ class ElevatorNavigation(FTSMBase):
                                self.nav_config_params)
 
         start_time = rospy.get_time()
+        waypoint_achieved = False
         rospy.loginfo('[elevator_nav] Going to elevator waiting point')
-        while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
-                                       self.elevator_nav_data.waiting_pose,
-                                       self.pos_tolerance_m,
-                                       self.orientation_tolerance_rad) and \
+        while not waypoint_achieved and \
               not has_timed_out(start_time, self.go_to_elevator_timeout) and \
               not self.elevator_nav_server.is_preempt_requested():
             feedback_msg.feedback.status.status_code = Status.WAITING
             self.elevator_nav_server.publish_feedback(feedback_msg)
-            rospy.sleep(0.5)
+            waypoint_achieved = is_waypoint_achieved(self.mn_nav_feedback_topic, 0.5)
+            rospy.sleep(0.1)
 
         # if the elevator waypoint could not be achieved or the action has been preempted,
         # we give up and return a failure
         if self.elevator_nav_server.is_preempt_requested():
             rospy.logwarn('[elevator_nav] WAIT_FOR_ELEVATOR action preempted')
             return NavElevatorResult(success=False)
-        elif not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
-                                      self.elevator_nav_data.waiting_pose,
-                                      self.pos_tolerance_m,
-                                      self.orientation_tolerance_rad):
+        elif not waypoint_achieved:
             rospy.logerr('[elevator_nav] Elevator waypoint not achieved within the allotted time; giving up')
             return NavElevatorResult(success=False)
 
@@ -312,17 +307,16 @@ class ElevatorNavigation(FTSMBase):
                                self.nav_config_params)
 
         start_time = rospy.get_time()
+        waypoint_achieved = False
         rospy.loginfo('[elevator_nav] Entering elevator')
-        while not (is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
-                                       self.elevator_nav_data.inside_elevator_pose,
-                                       self.pos_tolerance_m,
-                                       self.orientation_tolerance_rad) or \
-              is_polygon_in_polygon(self.robot_footprint, elevator_shape)) and \
+        while not waypoint_achieved and \
+              not is_polygon_in_polygon(self.robot_footprint, elevator_shape) and \
               not has_timed_out(start_time, self.enter_elevator_timeout) and \
               not self.elevator_nav_server.is_preempt_requested():
             feedback_msg.feedback.status.status_code = Status.ENTERING
             self.elevator_nav_server.publish_feedback(feedback_msg)
-            rospy.sleep(0.5)
+            waypoint_achieved = is_waypoint_achieved(self.mn_nav_feedback_topic, 0.5)
+            rospy.sleep(0.1)
 
         self.__cleanup_elevator_nav()
 
@@ -333,11 +327,7 @@ class ElevatorNavigation(FTSMBase):
             feedback_msg.feedback.status.status_code = Status.ELEVATOR_ACTION_PREEMPTED
             self.elevator_nav_server.publish_feedback(feedback_msg)
             return NavElevatorResult(success=False)
-        elif (is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
-                                    self.elevator_nav_data.inside_elevator_pose,
-                                    self.pos_tolerance_m,
-                                    self.orientation_tolerance_rad)):
-
+        elif waypoint_achieved:
             rospy.loginfo('[elevator_nav] Enter elevator waypoint achieved')
         elif is_polygon_in_polygon(self.robot_footprint, elevator_shape):
             rospy.loginfo('[elevator_nav] Robot footprint is inside elevator')
@@ -417,16 +407,15 @@ class ElevatorNavigation(FTSMBase):
                                self.nav_config_params)
 
         start_time = rospy.get_time()
+        waypoint_achieved = False
         rospy.loginfo('[elevator_nav] Exiting elevator')
-        while not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
-                                       outside_area_pose,
-                                       self.pos_tolerance_m,
-                                       self.orientation_tolerance_rad) and \
+        while not waypoint_achieved and \
               not has_timed_out(start_time, self.exit_elevator_timeout) and \
               not self.elevator_nav_server.is_preempt_requested():
             feedback_msg.feedback.status.status_code = Status.EXITING
             self.elevator_nav_server.publish_feedback(feedback_msg)
-            rospy.sleep(0.5)
+            waypoint_achieved = is_waypoint_achieved(self.mn_nav_feedback_topic, 0.5)
+            rospy.sleep(0.1)
 
         # if the outside waypoint could not be achieved, we give up and return a failure
         if self.elevator_nav_server.is_preempt_requested():
@@ -434,10 +423,7 @@ class ElevatorNavigation(FTSMBase):
             feedback_msg.feedback.status.status_code = Status.ELEVATOR_ACTION_PREEMPTED
             self.elevator_nav_server.publish_feedback(feedback_msg)
             return NavElevatorResult(success=False)
-        elif not is_waypoint_achieved(self.elevator_nav_data.base_pose.pose.pose,
-                                    outside_area_pose,
-                                    self.pos_tolerance_m,
-                                    self.orientation_tolerance_rad):
+        elif not waypoint_achieved:
             rospy.logerr('[elevator_nav] Elevator could not be exited within the allotted time; giving up')
             feedback_msg.feedback.status.status_code = Status.ELEVATOR_EXITING_FAILED
             self.elevator_nav_server.publish_feedback(feedback_msg)

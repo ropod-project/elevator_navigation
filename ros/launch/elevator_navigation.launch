@@ -2,6 +2,7 @@
 <launch>
     <node name="elevator_navigation" pkg="elevator_navigation" type="elevator_navigation" output="screen">
         <param name="mn_nav_topic" type="str" value="/route_navigation/goal" />
+        <param name="mn_nav_feedback_topic" type="str" value="/route_navigation/feedback" />
         <param name="mn_nav_cancel_topic" type="str" value="/route_navigation/cancel" />
         <param name="init_pose_topic" type="str" value="/initialpose" />
         <param name="localisation_topic" type="str" value="/amcl_pose" />
@@ -22,8 +23,5 @@
         <param name="enter_elevator_timeout" type="double" value="120" />
         <param name="ride_elevator_timeout" type="double" value="600" />
         <param name="exit_elevator_timeout" type="double" value="120" />
-
-        <param name="pos_tolerance_m" type="double" value="0.3" />
-        <param name="orientation_tolerance_deg" type="double" value="20.0" />
     </node>
 </launch>

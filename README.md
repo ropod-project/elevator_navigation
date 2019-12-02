@@ -29,6 +29,7 @@ The elevator navigation depends on the following other components:
 
 The component expects several parameters to be made available to the ROS parameter server:
 * `mn_nav_topic: str` -- name of a topic for sending maneuver navigation goals (default `/route_navigation/goal`)
+* `mn_nav_feedback_topic: str` -- name of a topic on which maneuver navigation feedback is received (default `/route_navigation/feedback`)
 * `mn_nav_cancel_topic: str` -- name of a topic for cancelling maneuver navigation goals (default `/route_navigation/cancel`)
 * `init_pose_topic: str` -- name of a topic for initialising the pose of a robot (default `/initialpose`)
 * `localisation_topic: str` -- name of a topic on which localisation pose estimates are published (default `/amcl_pose`)
@@ -44,6 +45,3 @@ The component expects several parameters to be made available to the ROS paramet
 * `enter_elevator_timeout: float` -- timeout (in seconds) for the action of entering an elevator (default `120`)
 * `ride_elevator_timeout: float` -- timeout (in seconds) for the action of riding an elevator (default `600`)
 * `exit_elevator_timeout: float` -- timeout (in seconds) for the action of exiting an elevator (default `120`)
-
-* `pos_tolerance_m: float` -- distance tolerance (in meters) for navigation waypoints (default `0.3`)
-* `orientation_tolerance_deg: float` -- orientation tolerance (in degrees) for navigation waypoints (default `20`)
